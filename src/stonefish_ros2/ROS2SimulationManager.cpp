@@ -65,6 +65,7 @@
 #include <Stonefish/actuators/Servo.h>
 #include <Stonefish/actuators/VariableBuoyancy.h>
 #include <Stonefish/core/Robot.h>
+#include <Stonefish/sensors/scalar/LiDAR360.h>
 
 using namespace std::placeholders;
 
@@ -264,6 +265,10 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
                     if(pubs_.find(sensor->getName() + "/pcl") != pubs_.end())
                         interface_->PublishMultibeamPCL(pubs_.at(sensor->getName() + "/pcl"), (Multibeam*)sensor);
                 }
+                    break;
+                
+                case ScalarSensorType::LiDAR360:
+                    interface_->PublishLiDAR360(pubs_.at(sensor->getName()), (LiDAR360*)sensor);
                     break;
 
                 case ScalarSensorType::PROFILER:
@@ -805,6 +810,11 @@ void ROS2SimulationManager::DepthCameraImageReady(DepthCamera* cam)
 void ROS2SimulationManager::Multibeam2ScanReady(Multibeam2* mb)
 {
     interface_->PublishMultibeam2(pubs_.at(mb->getName()), mb);
+}
+
+void ROS2SimulationManager::LiDAR360ScanReady(LiDAR360* lidar)
+{
+    interface_->PublishLiDAR360(pubs_.at(lidar->getName()), lidar);
 }
 
 void ROS2SimulationManager::FLSScanReady(FLS* fls)

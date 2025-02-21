@@ -55,6 +55,7 @@ namespace sf
     class Contact;
     class USBL;
     class AnimatedEntity;
+    class LiDAR360;
 
     class ROS2Interface
     {
@@ -80,6 +81,7 @@ namespace sf
         void PublishContact(rclcpp::PublisherBase::SharedPtr pub, Contact* cnt) const;
         void PublishUSBL(rclcpp::PublisherBase::SharedPtr pub, rclcpp::PublisherBase::SharedPtr pubInfo, USBL* usbl) const;
         void PublishTrajectoryState(rclcpp::PublisherBase::SharedPtr pubOdom, rclcpp::PublisherBase::SharedPtr pubIter, AnimatedEntity* anim) const;
+        void PublishLiDAR360(rclcpp::PublisherBase::SharedPtr pub, LiDAR360* lidar) const;
 
         static std::pair<sensor_msgs::msg::Image::SharedPtr, sensor_msgs::msg::CameraInfo::SharedPtr> GenerateCameraMsgPrototypes(Camera* cam, bool depth, const std::string frame_id = "");
         static std::pair<sensor_msgs::msg::Image::SharedPtr, sensor_msgs::msg::Image::SharedPtr> GenerateFLSMsgPrototypes(FLS* fls);

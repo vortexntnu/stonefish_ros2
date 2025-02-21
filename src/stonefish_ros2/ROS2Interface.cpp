@@ -67,6 +67,7 @@
 #include <Stonefish/sensors/vision/FLS.h>
 #include <Stonefish/sensors/vision/SSS.h>
 #include <Stonefish/sensors/vision/MSIS.h>
+#include <Stonefish/sensors/scalar/LiDAR360.h>
 #include <Stonefish/sensors/Contact.h>
 #include <Stonefish/comms/USBL.h>
 #include <Stonefish/entities/AnimatedEntity.h>
@@ -447,6 +448,47 @@ void ROS2Interface::PublishMultibeamPCL(rclcpp::PublisherBase::SharedPtr pub, Mu
     catch (std::runtime_error& e)
     {
         RCLCPP_ERROR_STREAM(nh_->get_logger(), "Runtime error whle publishing multibeam data: " << e.what());
+    }
+}
+
+void ROS2Interface::PublishLiDAR360(rclcpp::PublisherBase::SharedPtr pub, LiDAR360* lidar) const
+{
+    Sample s = lidar->getLastSample();
+    std::vector<sf::Scalar> distances = s.getData();
+    size_t angSteps = distances.size();
+    sf::Scalar angRange = M_PI / 4;
+    sf::Scalar angleIncrement = angRange / sf::Scalar(angSteps - 1);
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
+    cloud->header.frame_id = lidar->getName();
+    cloud->header.seq = s.getId(); // In this message it does not increase automatically
+    cloud->height = cloud->width = 1;
+
+    for(size_t i = 0; i < angSteps; ++i)
+    {
+        double angle = -angRange / 2 + i * angleIncrement;
+        pcl::PointXYZ pt;
+        pt.y = btSin(angle) * distances[i];
+        pt.x = btCos(angle) * distances[i];
+        pt.z = 0.0;
+        cloud->push_back(pt);
+    }
+
+    pcl::PCLPointCloud2 pclMsg;
+    pcl::toPCLPointCloud2(*cloud, pclMsg);
+
+    sensor_msgs::msg::PointCloud2 msg;
+    msg.header.stamp = nh_->get_clock()->now();
+    msg.header.frame_id = lidar->getName();
+    pcl_conversions::fromPCL(pclMsg, msg);
+
+    try
+    {
+        std::static_pointer_cast<rclcpp::Publisher<sensor_msgs::msg::PointCloud2>>(pub)->publish(msg);
+    }
+    catch (std::runtime_error& e)
+    {
+        RCLCPP_ERROR_STREAM(nh_->get_logger(), "Runtime error whle publishing LiDAR360 data: " << e.what());
     }
 }
 

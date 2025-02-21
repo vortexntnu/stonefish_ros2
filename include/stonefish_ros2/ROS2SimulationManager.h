@@ -65,6 +65,7 @@ namespace sf
     class SSS;
     class MSIS;
     class Joint;
+    class LiDAR360;
 
     struct ROS2Robot
 	{
@@ -105,6 +106,7 @@ namespace sf
 		virtual void FLSScanReady(FLS* fls);
 		virtual void SSSScanReady(SSS* sss);
 		virtual void MSISScanReady(MSIS* msis);
+        virtual void LiDAR360ScanReady(LiDAR360* lidar);
 
         void AddROS2Robot(const std::shared_ptr<ROS2Robot>& robot);
         bool RespawnROS2Robot(const std::string& robotName, const Transform& origin);
