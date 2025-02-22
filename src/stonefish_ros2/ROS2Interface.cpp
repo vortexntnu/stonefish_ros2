@@ -74,6 +74,7 @@
 #include <Stonefish/core/SimulationApp.h>
 #include <Stonefish/core/SimulationManager.h>
 #include <Stonefish/core/NED.h>
+#include <limits>
 
 namespace sf
 {
@@ -453,44 +454,88 @@ void ROS2Interface::PublishMultibeamPCL(rclcpp::PublisherBase::SharedPtr pub, Mu
 
 void ROS2Interface::PublishLiDAR360(rclcpp::PublisherBase::SharedPtr pub, LiDAR360* lidar) const
 {
+    // Retrieve the last sample from the sensor.
     Sample s = lidar->getLastSample();
     std::vector<sf::Scalar> distances = s.getData();
-    size_t angSteps = distances.size();
-    sf::Scalar angRange = M_PI / 4;
-    sf::Scalar angleIncrement = angRange / sf::Scalar(angSteps - 1);
-
+    RCLCPP_INFO_STREAM(nh_->get_logger(), "LiDAR360 data: " << distances.size() << " samples");
+    
+    // Get sensor configuration parameters.
+    unsigned int resolution = lidar->getResolution();   // horizontal beams
+    unsigned int layers     = lidar->getLayers();         // vertical beams
+    unsigned int numHorizontal = resolution; // assuming exactly 'resolution' beams horizontally
+    unsigned int numVertical   = layers;       // assuming exactly 'layers' beams vertically
+    unsigned int totalPoints   = numHorizontal * numVertical;
+    
+    // Get the LiDAR's configured horizontal and vertical FOV (in radians).
+    sf::Scalar angRangeHori = lidar->getAngleRangeHori(); // e.g., 360° in radians
+    sf::Scalar angRangeVert = lidar->getAngleRangeVert(); // e.g., 42.4° in radians
+    
+    // Compute the increments for horizontal and vertical angles.
+    sf::Scalar hIncrement = angRangeHori / (sf::Scalar)numHorizontal;
+    sf::Scalar vIncrement = angRangeVert / (sf::Scalar)numVertical;
+    
+    // Create a PCL point cloud and set its organized dimensions.
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
     cloud->header.frame_id = lidar->getName();
-    cloud->header.seq = s.getId(); // In this message it does not increase automatically
-    cloud->height = cloud->width = 1;
+    cloud->header.seq = s.getId();
+    cloud->height = numVertical;
+    cloud->width = numHorizontal;
+    cloud->is_dense = false;
+    cloud->points.reserve(totalPoints);
 
-    for(size_t i = 0; i < angSteps; ++i)
+    // Loop over each vertical layer and horizontal beam.
+    for (unsigned int j = 0; j < numVertical; ++j)
     {
-        double angle = -angRange / 2 + i * angleIncrement;
-        pcl::PointXYZ pt;
-        pt.y = btSin(angle) * distances[i];
-        pt.x = btCos(angle) * distances[i];
-        pt.z = 0.0;
-        cloud->push_back(pt);
+        // Compute vertical angle: distributed from -angRangeVert/2 to +angRangeVert/2.
+        double vAngle = - (angRangeVert / 2.0) + j * vIncrement;
+        for (unsigned int i = 0; i < numHorizontal; ++i)
+        {
+            // Compute horizontal angle: distributed from -angRangeHori/2 to +angRangeHori/2.
+            double hAngle = - (angRangeHori / 2.0) + i * hIncrement;
+            // Calculate index into the distances vector.
+            unsigned int index = j * numHorizontal + i;
+            double distance = distances[index];
+            pcl::PointXYZ pt;
+            double min_range = lidar->getMinRange();
+            double max_range = lidar->getMaxRange();
+            if (distance == 0 || distance <= min_range || distance >= max_range)
+            {
+                // If distance is 0, set point coordinates to NaN.
+                pt.x = pt.y = pt.z = std::numeric_limits<float>::quiet_NaN();
+            }
+            else
+            {
+                // Convert spherical coordinates to Cartesian.
+                pt.x = btCos(vAngle) * btCos(hAngle) * distance;
+                pt.y = btCos(vAngle) * btSin(hAngle) * distance;
+                pt.z = btSin(vAngle) * distance;
+            }
+            cloud->points.push_back(pt);
+        }
     }
-
+    
+    // Convert the PCL cloud to a ROS2 PointCloud2 message.
     pcl::PCLPointCloud2 pclMsg;
     pcl::toPCLPointCloud2(*cloud, pclMsg);
-
     sensor_msgs::msg::PointCloud2 msg;
     msg.header.stamp = nh_->get_clock()->now();
     msg.header.frame_id = lidar->getName();
     pcl_conversions::fromPCL(pclMsg, msg);
-
+    
+    RCLCPP_INFO_STREAM(nh_->get_logger(), "LiDAR360 data: " << msg.data.size() << " bytes");
+    RCLCPP_INFO_STREAM(nh_->get_logger(), "LiDAR360 width: " << msg.width << " height: " << msg.height);
+    
     try
     {
         std::static_pointer_cast<rclcpp::Publisher<sensor_msgs::msg::PointCloud2>>(pub)->publish(msg);
     }
-    catch (std::runtime_error& e)
+    catch (std::runtime_error &e)
     {
-        RCLCPP_ERROR_STREAM(nh_->get_logger(), "Runtime error whle publishing LiDAR360 data: " << e.what());
+        RCLCPP_ERROR_STREAM(nh_->get_logger(), "Runtime error while publishing LiDAR360 data: " << e.what());
     }
+    RCLCPP_INFO_STREAM(nh_->get_logger(), "LiDAR360 data published");
 }
+
 
 void ROS2Interface::PublishProfiler(rclcpp::PublisherBase::SharedPtr pub, Profiler* prof) const
 {

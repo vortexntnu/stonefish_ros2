@@ -829,7 +829,7 @@ Sensor* ROS2ScenarioParser::ParseSensor(XMLElement* element, const std::string& 
                     
                     case ScalarSensorType::LiDAR360:
                     {
-                        pubs[sensorName] = nh_->create_publisher<sensor_msgs::msg::LaserScan>(topicStr, queueSize);
+                        pubs[sensorName] = nh_->create_publisher<sensor_msgs::msg::PointCloud2>(topicStr, queueSize);
                         RCLCPP_INFO(nh_->get_logger(), "LiDAR360 sensor '%s' created", sensorName.c_str());
                     }
                         break;
