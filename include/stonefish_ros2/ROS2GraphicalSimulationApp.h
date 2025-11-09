@@ -38,6 +38,19 @@ namespace sf
         ROS2GraphicalSimulationApp(std::string title, std::string dataPath, RenderSettings s, HelperSettings h, ROS2SimulationManager* sim);
         void Startup();
         void Tick();
+
+    protected:
+        void DoHUD() override;
+        void KeyDown(SDL_Event* event) override;  // firma correcta (void, SDL_Event*)
+
+    private:
+        bool showPosePanel_ = true;
+        // Temporarily deactivate the view panel to avoid Trackball API
+        bool showViewPanel_ = false;
+
+        void DrawPosePanel_(float x, float& y);
+        // The view panel declaration can remain, but it will not be used.
+        void DrawViewPanel_(float x, float& y);
     };
 }
 
