@@ -64,6 +64,7 @@ ament_target_dependencies(stonefish_ros2_interface
  rclcpp 
  ament_index_cpp 
  std_srvs
+ std_msgs
  geometry_msgs
  nav_msgs
  visualization_msgs
