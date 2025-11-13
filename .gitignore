@@ -1,0 +1,5 @@
+# IDE & build junk
+.vscode/
+log/
+build/
+install/

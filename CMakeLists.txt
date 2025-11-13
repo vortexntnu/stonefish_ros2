@@ -34,6 +34,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ThrusterState.msg"
   "msg/DebugPhysics.msg"
   "msg/Event.msg"
+  "msg/SonarInfo.msg"
   "msg/EventArray.msg"
   "srv/SonarSettings.srv"
   "srv/SonarSettings2.srv"
@@ -63,6 +64,7 @@ ament_target_dependencies(stonefish_ros2_interface
  rclcpp 
  ament_index_cpp 
  std_srvs
+ std_msgs
  geometry_msgs
  nav_msgs
  visualization_msgs
