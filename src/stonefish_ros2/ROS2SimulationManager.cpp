@@ -986,9 +986,12 @@ void ROS2SimulationManager::FLSScanReady(FLS* fls)
     info.vertical_fov = fls->getVerticalFOV();
 
     if (info.height > 0)
-        info.meters_per_pixel = info.max_range / static_cast<double>(info.height);
+        info.meters_per_pixel_y = info.max_range / static_cast<double>(info.height);
+        info.meters_per_pixel_x = info.meters_per_pixel_y;
+
     else
-        info.meters_per_pixel = 0.0;
+        info.meters_per_pixel_x = 0.0;
+        info.meters_per_pixel_y = 0.0;
 
     auto sonar_info_pub = std::static_pointer_cast<rclcpp::Publisher<stonefish_ros2::msg::SonarInfo>>(pubs_.at(fls->getName() + "/info"));
     
