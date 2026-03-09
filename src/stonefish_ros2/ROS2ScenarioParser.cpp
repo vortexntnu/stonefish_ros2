@@ -936,7 +936,7 @@ Sensor* ROS2ScenarioParser::ParseSensor(XMLElement* element, const std::string& 
                         img_pubs[sensorName] = it->advertise(topicStr + "/image", queueSize);
                         img_pubs[sensorName + "/display"] = it->advertise(topicStr + "/display", queueSize);
                         img_pubs[sensorName + "/display_mono"] = it->advertise(topicStr + "/display_mono", queueSize);
-                        pubs[sensorName + "/info"] = nh_->create_publisher<stonefish_ros2::msg::SonarInfo>(topicStr + "/sonar_info", queueSize);
+                        pubs[sensorName + "/info"] = nh_->create_publisher<stonefish_ros2::msg::SonarInfo>(topicStr + "/stonefish_sonar_info", queueSize);
                     }
                         break;
 
