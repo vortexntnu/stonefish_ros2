@@ -1144,6 +1144,14 @@ void ROS2SimulationManager::TrajectoryCallback(const nav_msgs::msg::Odometry::Sh
     tr->setAngularVelocity(omega);
 }
 
+void ROS2SimulationManager::PoseStampedTrajectoryCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg, ManualTrajectory* tr)
+{
+    Quaternion q(msg->pose.orientation.x, msg->pose.orientation.y,
+                 msg->pose.orientation.z, msg->pose.orientation.w);
+    Vector3 p(msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
+    tr->setTransform(Transform(q, p));
+}
+
 void ROS2SimulationManager::SimpleThrusterCallback(const std_msgs::msg::Float64::SharedPtr msg, SimpleThruster* th)
 {
     th->setSetpoint(msg->data, Scalar(0));

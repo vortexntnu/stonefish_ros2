@@ -35,6 +35,7 @@
 #include "std_msgs/msg/string.hpp"
 #include "geometry_msgs/msg/vector3.hpp"
 #include "geometry_msgs/msg/transform.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
@@ -141,6 +142,7 @@ namespace sf
         void JetVFCallback(const std_msgs::msg::Float64::SharedPtr msg, Jet* vf);
         void ActuatorOriginCallback(const geometry_msgs::msg::Transform::SharedPtr msg, Actuator* act);
         void TrajectoryCallback(const nav_msgs::msg::Odometry::SharedPtr msg, ManualTrajectory* tr);
+        void PoseStampedTrajectoryCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg, ManualTrajectory* tr);
         void PushCallback(const std_msgs::msg::Float64::SharedPtr msg, Push* push);
         void SimpleThrusterCallback(const std_msgs::msg::Float64::SharedPtr msg, SimpleThruster* th);
         void ThrusterCallback(const std_msgs::msg::Float64::SharedPtr msg, Thruster* th);

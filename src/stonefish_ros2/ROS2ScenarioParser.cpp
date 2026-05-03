@@ -35,6 +35,7 @@
 #include "visualization_msgs/msg/marker.hpp"
 #include "visualization_msgs/msg/marker_array.hpp"
 #include "nav_msgs/msg/odometry.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/wrench_stamped.hpp"
 #include "geometry_msgs/msg/accel_with_covariance_stamped.hpp"
 #include "geometry_msgs/msg/twist_with_covariance_stamped.hpp"
@@ -487,9 +488,22 @@ bool ROS2ScenarioParser::ParseAnimated(XMLElement* element)
         AnimatedEntity* anim = (AnimatedEntity*)sim->getEntity(nameStr);
         if(anim != nullptr)
         {
-            std::function<void(const nav_msgs::msg::Odometry::SharedPtr msg)> callbackFunc =
-                std::bind(&ROS2SimulationManager::TrajectoryCallback, sim, _1, (ManualTrajectory*)anim->getTrajectory());
-            subs[nameStr + "/odometry"] = nh_->create_subscription<nav_msgs::msg::Odometry>(std::string(topic), 10, callbackFunc);
+            const char* subType = nullptr;
+            std::string subTypeStr = (item->QueryStringAttribute("type", &subType) == XML_SUCCESS)
+                                     ? std::string(subType) : "odometry";
+
+            if(subTypeStr == "pose_stamped")
+            {
+                std::function<void(const geometry_msgs::msg::PoseStamped::SharedPtr)> callbackFunc =
+                    std::bind(&ROS2SimulationManager::PoseStampedTrajectoryCallback, sim, _1, (ManualTrajectory*)anim->getTrajectory());
+                subs[nameStr + "/odometry"] = nh_->create_subscription<geometry_msgs::msg::PoseStamped>(std::string(topic), 10, callbackFunc);
+            }
+            else
+            {
+                std::function<void(const nav_msgs::msg::Odometry::SharedPtr)> callbackFunc =
+                    std::bind(&ROS2SimulationManager::TrajectoryCallback, sim, _1, (ManualTrajectory*)anim->getTrajectory());
+                subs[nameStr + "/odometry"] = nh_->create_subscription<nav_msgs::msg::Odometry>(std::string(topic), 10, callbackFunc);
+            }
         }
     }
     else //State of the trajectory published with a message
