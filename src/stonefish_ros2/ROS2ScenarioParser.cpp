@@ -193,7 +193,8 @@ bool ROS2ScenarioParser::PreProcess(XMLNode* root, const std::map<std::string, s
     if(!ScenarioParser::PreProcess(root, args))
         return false;
 
-    //Scene landmarks: <ros_landmarks topic="/orca/landmarks" frame_id="orca/odom" rate="10"/>
+    //Scene landmarks: <ros_landmarks topic="/orca/landmarks" frame_id="orca/odom" rate="10" profile="none"
+    //                  front_camera="orca/front_camera_optical" down_camera="orca/downwards_camera_optical"/>
     XMLElement* item = root->FirstChildElement("ros_landmarks");
     if(item != nullptr)
     {
@@ -207,7 +208,9 @@ bool ROS2ScenarioParser::PreProcess(XMLNode* root, const std::map<std::string, s
             return false;
         }
         item->QueryDoubleAttribute("rate", &rate);
-        ((ROS2SimulationManager*)getSimulationManager())->getLandmarks().Configure(topic, frameId, rate);
+        auto attr = [&](const char* name) { const char* v = item->Attribute(name); return std::string(v != nullptr ? v : ""); };
+        ((ROS2SimulationManager*)getSimulationManager())->getLandmarks().Configure(
+            topic, frameId, rate, attr("profile"), attr("front_camera"), attr("down_camera"));
     }
     return true;
 }
@@ -258,6 +261,7 @@ bool ROS2ScenarioParser::IncludeFiles(XMLNode* node)
     point (optional) is in the object's frame, default is the centre of its bounding box.
     normal (optional, object frame) publishes its yaw, e.g. the front face of a board.
     enabled="false" keeps the landmark in the scene without publishing it.
+    camera="down" says the down camera sees it (bin floors, table items), for detection profiles.
 */
 bool ROS2ScenarioParser::ParseLandmarks(XMLElement* element)
 {
@@ -292,6 +296,8 @@ bool ROS2ScenarioParser::ParseLandmark(XMLElement* item, const std::string& obje
     if(ParseLandmarkVector(item->Attribute("normal"), v))
         l.normal = v;
     item->QueryBoolAttribute("enabled", &l.enabled);
+    const char* camera = item->Attribute("camera");
+    l.downCamera = camera != nullptr && std::string(camera) == "down";
 
     std::string error;
     if(!((ROS2SimulationManager*)getSimulationManager())->getLandmarks().Add(l, error))

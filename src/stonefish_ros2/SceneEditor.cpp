@@ -20,8 +20,11 @@
 #include <Stonefish/entities/SolidEntity.h>
 #include <Stonefish/entities/StaticEntity.h>
 #include <Stonefish/graphics/IMGUI.h>
+#include <Stonefish/graphics/OpenGLContent.h>
+#include <Stonefish/graphics/OpenGLPipeline.h>
 #include <Stonefish/graphics/OpenGLTrackball.h>
 #include <Stonefish/utils/SystemUtil.hpp>
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -38,6 +41,11 @@ namespace
     const int kOwner = 917;           // IMGUI owner id of the editor panel
     const float kPickRadius = 12.f;   // [px] for clicking a landmark marker
     const size_t kUndoDepth = 50;
+    const float kHandleRadius = 9.f;  // [px] for grabbing a gizmo handle
+    const int kRingSegments = 48;
+    const Scalar kSnapMove = 0.1;     // [m] with Ctrl
+    const Scalar kSnapAngleDeg = 15.0;
+    const float kPanelHeight = 520.f;
 
     std::string ReadFile(const std::string& path)
     {
@@ -124,6 +132,8 @@ namespace
             line += " normal=\"" + Format(l.normal->getX(), l.normal->getY(), l.normal->getZ()) + "\"";
         if(!l.enabled)
             line += " enabled=\"false\"";
+        if(l.downCamera)
+            line += " camera=\"down\"";
         return line + "/>\n";
     }
 
@@ -183,6 +193,8 @@ void SceneEditor::UpdateSelection()
     if(name == pickedName_)
         return;
     pickedName_ = name;
+    if(dragging_ != Handle::NONE)
+        return; // the click on a gizmo handle also picked whatever is behind it; keep the selection
     groupName_.clear();
     group_.clear();
     if(picked == nullptr)
@@ -271,7 +283,8 @@ void SceneEditor::AddLandmark()
     {
         landmarksChanged_.insert(pickedName_);
         selectedLandmark_ = LandmarkRef{pickedName_, sim_->getLandmarks().Of(pickedName_).size() - 1};
-        SetStatus("Added " + l.typeName + " - drag its marker to place it");
+        tool_ = Tool::MOVE;
+        SetStatus("Added " + l.typeName + " - move it with the arrows");
     }
     else
     {
@@ -355,22 +368,19 @@ void SceneEditor::Translate(const Vector3& delta)
     }
 }
 
-void SceneEditor::Rotate(Scalar yawDeg)
+void SceneEditor::RotateAbout(const Vector3& axis, Scalar angle, const Vector3& pivot)
 {
-    Vector3 c;
-    if(!GroupCenter(c))
-        return;
-    // About the vertical axis through the group's centre (the meshes' own origins can be far away)
-    Transform R(Quaternion(Vector3(0, 0, 1), yawDeg * M_PI / 180.0), Vector3(0, 0, 0));
-    Transform toCenter(Quaternion::getIdentity(), c);
-    for(StaticEntity* e : group_)
+    // About an axis through the pivot (the meshes' own origins can be far away)
+    Transform R(Quaternion(axis, angle), Vector3(0, 0, 0));
+    Transform toPivot(Quaternion::getIdentity(), pivot);
+    for(size_t i = 0; i < group_.size() && i < dragStartTransforms_.size(); ++i)
     {
-        e->setTransform(toCenter * R * toCenter.inverse() * e->getTransform());
-        moved_.insert(e->getName());
+        group_[i]->setTransform(toPivot * R * toPivot.inverse() * dragStartTransforms_[i]);
+        moved_.insert(group_[i]->getName());
     }
 }
 
-// --- Mouse -----------------------------------------------------------------------
+// --- Screen ----------------------------------------------------------------------
 
 bool SceneEditor::ToScreen(const Vector3& p, float& sx, float& sy) const
 {
@@ -386,105 +396,217 @@ bool SceneEditor::ToScreen(const Vector3& p, float& sx, float& sy) const
     return true;
 }
 
-bool SceneEditor::PlaneHit(int x, int y, Vector3& hit) const
+bool SceneEditor::PlaneHit(int x, int y, const Vector3& point, const Vector3& normal, Vector3& hit) const
 {
     OpenGLTrackball* trackball = sim_->getTrackball();
     glm::vec3 eye = trackball->GetEyePosition();
     glm::vec3 ray = trackball->Ray(x, y);
     Vector3 o(eye.x, eye.y, eye.z);
     Vector3 d(ray.x, ray.y, ray.z);
-    Scalar denom = d.dot(planeNormal_);
+    Scalar denom = d.dot(normal);
     if(std::abs(denom) < 1e-6)
         return false;
-    Scalar t = (planePoint_ - o).dot(planeNormal_) / denom;
+    Scalar t = (point - o).dot(normal) / denom;
     if(t < 0)
         return false;
     hit = o + d * t;
     return true;
 }
 
-bool SceneEditor::StartDrag(int x, int y, const Vector3& through)
+// --- Gizmo -----------------------------------------------------------------------
+
+bool SceneEditor::GizmoCenter(Vector3& c) const
 {
-    dragVertical_ = (SDL_GetModState() & KMOD_SHIFT) != 0;
-    planePoint_ = through;
-    if(dragVertical_)
-    {
-        // Vertical plane facing the camera
-        glm::vec3 look = sim_->getTrackball()->GetLookingDirection();
-        planeNormal_ = Vector3(look.x, look.y, 0);
-        if(planeNormal_.length2() < 1e-6)
-            planeNormal_ = Vector3(1, 0, 0);
-        planeNormal_.normalize();
-    }
-    else
-        planeNormal_ = Vector3(0, 0, 1);
-    return PlaneHit(x, y, dragStart_);
+    if(selectedLandmark_)
+        return LandmarkWorld(*selectedLandmark_, c);
+    return GroupCenter(c);
 }
 
-void SceneEditor::MouseMove(SDL_Event* event)
+Scalar SceneEditor::GizmoSize(const Vector3& c) const
 {
-    if(!active_)
-        return;
-    int x = event->motion.x, y = event->motion.y;
+    // The same size on screen at any distance, like Unity's handles
+    glm::vec3 eye = sim_->getTrackball()->GetEyePosition();
+    return (c - Vector3(eye.x, eye.y, eye.z)).length() * 0.15;
+}
 
-    if((event->motion.state & SDL_BUTTON_LMASK) == 0 || app_->getGUI()->isAnyActive())
+Vector3 SceneEditor::HandleAxis(Handle h) const
+{
+    switch(h)
     {
-        drag_ = Drag::NONE;
-        // Hover: the closest landmark marker under the cursor
-        hoverLandmark_.reset();
-        float best = kPickRadius;
-        for(const LandmarkRef& ref : AllLandmarks())
-        {
-            Vector3 p;
-            float sx, sy;
-            if(LandmarkWorld(ref, p) && ToScreen(p, sx, sy) && std::hypot(sx - x, sy - y) < best)
-            {
-                best = std::hypot(sx - x, sy - y);
-                hoverLandmark_ = ref;
-            }
-        }
-        return;
+        case Handle::AXIS_X: case Handle::RING_X: return Vector3(1, 0, 0);  // north
+        case Handle::AXIS_Y: case Handle::RING_Y: return Vector3(0, 1, 0);  // east
+        case Handle::AXIS_Z: case Handle::RING_Z: return Vector3(0, 0, -1); // up (Stonefish z is down)
+        default: return Vector3(0, 0, 0);
+    }
+}
+
+namespace
+{
+    float SegmentDistance(float px, float py, float ax, float ay, float bx, float by)
+    {
+        float vx = bx - ax, vy = by - ay;
+        float len2 = vx * vx + vy * vy;
+        float t = len2 > 0.f ? std::clamp(((px - ax) * vx + (py - ay) * vy) / len2, 0.f, 1.f) : 0.f;
+        return std::hypot(px - (ax + t * vx), py - (ay + t * vy));
     }
 
-    if(drag_ == Drag::NONE)
+    //! Two unit vectors perpendicular to the axis, for drawing its ring.
+    void RingBasis(const Vector3& axis, Vector3& u, Vector3& v)
     {
-        if(pressOnLandmark_ && selectedLandmark_)
+        u = std::abs(axis.getZ()) > 0.9 ? Vector3(1, 0, 0) : Vector3(0, 0, 1);
+        u = (u - axis * u.dot(axis)).normalized();
+        v = axis.cross(u);
+    }
+}
+
+SceneEditor::Handle SceneEditor::HandleUnder(int x, int y) const
+{
+    Vector3 c;
+    float cx, cy;
+    if(tool_ == Tool::SELECT || !GizmoCenter(c) || !ToScreen(c, cx, cy))
+        return Handle::NONE;
+    Scalar L = GizmoSize(c);
+    Handle best = Handle::NONE;
+    float bestDist = kHandleRadius;
+
+    if(tool_ == Tool::MOVE)
+    {
+        // Plane square first: it sits between the X and Y arrows
+        float px, py;
+        if(ToScreen(c + Vector3(0.25, 0.25, 0) * L, px, py) && std::hypot(px - x, py - y) < bestDist)
+            return Handle::PLANE;
+        for(Handle h : {Handle::AXIS_X, Handle::AXIS_Y, Handle::AXIS_Z})
         {
-            Vector3 p;
-            if(LandmarkWorld(*selectedLandmark_, p) && StartDrag(x, y, p))
+            float ex, ey;
+            if(!ToScreen(c + HandleAxis(h) * L, ex, ey))
+                continue;
+            float d = SegmentDistance((float)x, (float)y, cx, cy, ex, ey);
+            if(d < bestDist)
             {
-                PushUndo();
-                dragLandmarkStart_ = p;
-                drag_ = Drag::LANDMARK;
+                bestDist = d;
+                best = h;
             }
         }
-        else
+    }
+    else if(!selectedLandmark_)
+    {
+        for(Handle h : {Handle::RING_X, Handle::RING_Y, Handle::RING_Z})
         {
-            // Only drag what was clicked: the press picked the object under the cursor
-            UpdateSelection();
-            Vector3 c;
-            if(GroupCenter(c) && StartDrag(x, y, c))
+            Vector3 u, v;
+            RingBasis(HandleAxis(h), u, v);
+            float lx = 0, ly = 0;
+            for(int i = 0; i <= kRingSegments; ++i)
             {
-                PushUndo();
-                dragStartTransforms_.clear();
-                for(StaticEntity* e : group_)
-                    dragStartTransforms_.push_back(e->getTransform());
-                drag_ = Drag::OBJECT;
+                Scalar a = 2 * M_PI * i / kRingSegments;
+                float sx, sy;
+                if(!ToScreen(c + (u * std::cos(a) + v * std::sin(a)) * L, sx, sy))
+                    continue;
+                if(i > 0)
+                {
+                    float d = SegmentDistance((float)x, (float)y, lx, ly, sx, sy);
+                    if(d < bestDist)
+                    {
+                        bestDist = d;
+                        best = h;
+                    }
+                }
+                lx = sx;
+                ly = sy;
             }
         }
+    }
+    return best;
+}
+
+void SceneEditor::StartGizmoDrag(Handle h, int x, int y)
+{
+    Vector3 c;
+    if(!GizmoCenter(c))
         return;
+    PushUndo();
+    dragging_ = h;
+    pressX_ = x;
+    pressY_ = y;
+    dragCenter_ = c;
+    dragStartTransforms_.clear();
+    for(StaticEntity* e : group_)
+        dragStartTransforms_.push_back(e->getTransform());
+    dragLandmarkStart_ = c;
+
+    if(h == Handle::PLANE)
+        PlaneHit(x, y, c, Vector3(0, 0, 1), dragHitStart_);
+    else if(h == Handle::RING_X || h == Handle::RING_Y || h == Handle::RING_Z)
+    {
+        float cx, cy;
+        ToScreen(c, cx, cy);
+        dragAngleStart_ = std::atan2((float)y - cy, (float)x - cx);
+        // Which way a positive rotation turns on screen, seen from this camera
+        Vector3 axis = HandleAxis(h), u, v;
+        RingBasis(axis, u, v);
+        float ax, ay, bx, by;
+        ToScreen(c + u, ax, ay);
+        ToScreen(c + Transform(Quaternion(axis, 0.1), Vector3(0, 0, 0)) * u, bx, by);
+        float da = std::atan2(by - cy, bx - cx) - std::atan2(ay - cy, ax - cx);
+        da = std::atan2(std::sin(da), std::cos(da));
+        dragRotationSign_ = da >= 0.f ? 1 : -1;
+    }
+}
+
+void SceneEditor::UpdateGizmoDrag(int x, int y, bool snap)
+{
+    Vector3 delta(0, 0, 0);
+    switch(dragging_)
+    {
+        case Handle::AXIS_X:
+        case Handle::AXIS_Y:
+        case Handle::AXIS_Z:
+        {
+            // Mouse movement along the arrow on screen, in metres along the axis
+            Vector3 axis = HandleAxis(dragging_);
+            float cx, cy, ex, ey;
+            if(!ToScreen(dragCenter_, cx, cy) || !ToScreen(dragCenter_ + axis, ex, ey))
+                return;
+            float sx = ex - cx, sy = ey - cy;
+            float len2 = sx * sx + sy * sy;
+            if(len2 < 1e-3f)
+                return;
+            Scalar t = ((x - pressX_) * sx + (y - pressY_) * sy) / len2;
+            if(snap)
+                t = std::round(t / kSnapMove) * kSnapMove;
+            delta = axis * t;
+            break;
+        }
+        case Handle::PLANE:
+        {
+            Vector3 hit;
+            if(!PlaneHit(x, y, dragCenter_, Vector3(0, 0, 1), hit))
+                return;
+            delta = hit - dragHitStart_;
+            delta.setZ(0);
+            if(snap)
+                delta = Vector3(std::round(delta.getX() / kSnapMove) * kSnapMove, std::round(delta.getY() / kSnapMove) * kSnapMove, 0);
+            break;
+        }
+        case Handle::RING_X:
+        case Handle::RING_Y:
+        case Handle::RING_Z:
+        {
+            float cx, cy;
+            if(!ToScreen(dragCenter_, cx, cy))
+                return;
+            float a = std::atan2((float)y - cy, (float)x - cx) - dragAngleStart_;
+            a = std::atan2(std::sin(a), std::cos(a));
+            Scalar angle = a * dragRotationSign_;
+            if(snap)
+                angle = std::round(angle / (kSnapAngleDeg * M_PI / 180.0)) * (kSnapAngleDeg * M_PI / 180.0);
+            RotateAbout(HandleAxis(dragging_), angle, dragCenter_);
+            return;
+        }
+        default:
+            return;
     }
 
-    Vector3 hit;
-    if(!PlaneHit(x, y, hit))
-        return;
-    Vector3 delta = hit - dragStart_;
-    if(dragVertical_)
-        delta = Vector3(0, 0, delta.getZ());
-    else
-        delta.setZ(0);
-
-    if(drag_ == Drag::LANDMARK)
+    if(selectedLandmark_)
         MoveLandmark(*selectedLandmark_, dragLandmarkStart_ + delta);
     else
         for(size_t i = 0; i < group_.size() && i < dragStartTransforms_.size(); ++i)
@@ -496,10 +618,135 @@ void SceneEditor::MouseMove(SDL_Event* event)
         }
 }
 
+void SceneEditor::DrawGizmo()
+{
+    Vector3 c;
+    if(tool_ == Tool::SELECT || !GizmoCenter(c))
+        return;
+    if(tool_ == Tool::ROTATE && selectedLandmark_)
+        return; // a landmark is a point: nothing to rotate
+
+    OpenGLContent* content = app_->getGLPipeline()->getContent();
+    OpenGLTrackball* trackball = sim_->getTrackball();
+    content->SetCurrentView(trackball);
+    GLboolean depth = glIsEnabled(GL_DEPTH_TEST);
+    glDisable(GL_DEPTH_TEST); // handles are always on top, like in Unity
+
+    Scalar L = GizmoSize(c);
+    glm::vec3 C((float)c.getX(), (float)c.getY(), (float)c.getZ());
+    glm::vec3 up = trackball->GetUpDirection();
+    glm::vec3 right = glm::normalize(glm::cross(trackball->GetLookingDirection(), up));
+    float w = (float)L * 0.008f; // line thickness: a few offset copies of each line
+    auto color = [&](Handle h, glm::vec4 base) {
+        return (dragging_ == h || (dragging_ == Handle::NONE && hover_ == h)) ? glm::vec4(1.f, 0.95f, 0.2f, 1.f) : base;
+    };
+    auto thickLine = [&](PrimitiveType type, const std::vector<glm::vec3>& pts, glm::vec4 col) {
+        for(glm::vec3 offset : {glm::vec3(0.f), right * w, -right * w, up * w, -up * w})
+        {
+            std::vector<glm::vec3> shifted;
+            for(const glm::vec3& p : pts)
+                shifted.push_back(p + offset);
+            content->DrawPrimitives(type, &shifted, col);
+        }
+    };
+    const glm::vec4 red(0.95f, 0.25f, 0.25f, 1.f), green(0.3f, 0.9f, 0.3f, 1.f), blue(0.3f, 0.5f, 1.f, 1.f);
+
+    if(tool_ == Tool::MOVE)
+    {
+        for(auto [h, col] : {std::pair{Handle::AXIS_X, red}, std::pair{Handle::AXIS_Y, green}, std::pair{Handle::AXIS_Z, blue}})
+        {
+            Vector3 a = HandleAxis(h);
+            glm::vec3 A((float)a.getX(), (float)a.getY(), (float)a.getZ());
+            glm::vec4 hc = color(h, col);
+            glm::vec3 tip = C + A * (float)L;
+            thickLine(PrimitiveType::LINES, {C, tip}, hc);
+            // Arrow head: a cone of triangles
+            glm::vec3 base = C + A * (float)(L * 0.8);
+            glm::vec3 u = glm::normalize(glm::abs(A.z) > 0.9f ? glm::cross(A, glm::vec3(1, 0, 0)) : glm::cross(A, glm::vec3(0, 0, 1)));
+            glm::vec3 v = glm::cross(A, u);
+            std::vector<glm::vec3> tris;
+            for(int i = 0; i < 12; ++i)
+            {
+                float a0 = 2.f * (float)M_PI * i / 12.f, a1 = 2.f * (float)M_PI * (i + 1) / 12.f;
+                float r = (float)L * 0.07f;
+                tris.push_back(tip);
+                tris.push_back(base + (u * std::cos(a0) + v * std::sin(a0)) * r);
+                tris.push_back(base + (u * std::cos(a1) + v * std::sin(a1)) * r);
+            }
+            content->DrawPrimitives(PrimitiveType::TRIANGLES, &tris, hc);
+        }
+        // Horizontal plane square
+        float s = (float)L * 0.25f, e = (float)L * 0.12f;
+        glm::vec3 q = C + glm::vec3(s, s, 0.f);
+        std::vector<glm::vec3> square = {q + glm::vec3(-e, -e, 0), q + glm::vec3(e, -e, 0), q + glm::vec3(e, e, 0),
+                                         q + glm::vec3(-e, -e, 0), q + glm::vec3(e, e, 0), q + glm::vec3(-e, e, 0)};
+        glm::vec4 pc = color(Handle::PLANE, glm::vec4(0.3f, 0.5f, 1.f, 0.6f));
+        content->DrawPrimitives(PrimitiveType::TRIANGLES, &square, pc);
+    }
+    else
+    {
+        for(auto [h, col] : {std::pair{Handle::RING_X, red}, std::pair{Handle::RING_Y, green}, std::pair{Handle::RING_Z, blue}})
+        {
+            Vector3 u, v;
+            RingBasis(HandleAxis(h), u, v);
+            std::vector<glm::vec3> ring;
+            for(int i = 0; i <= kRingSegments; ++i)
+            {
+                Scalar a = 2 * M_PI * i / kRingSegments;
+                Vector3 p = c + (u * std::cos(a) + v * std::sin(a)) * L;
+                ring.push_back(glm::vec3((float)p.getX(), (float)p.getY(), (float)p.getZ()));
+            }
+            thickLine(PrimitiveType::LINE_STRIP, ring, color(h, col));
+        }
+    }
+
+    if(depth)
+        glEnable(GL_DEPTH_TEST);
+}
+
+// --- Mouse -----------------------------------------------------------------------
+
+void SceneEditor::MouseMove(SDL_Event* event)
+{
+    if(!active_)
+        return;
+    int x = event->motion.x, y = event->motion.y;
+    bool leftDown = (event->motion.state & SDL_BUTTON_LMASK) != 0;
+
+    if(dragging_ != Handle::NONE)
+    {
+        if(leftDown)
+            UpdateGizmoDrag(x, y, (SDL_GetModState() & KMOD_CTRL) != 0);
+        return;
+    }
+    if(leftDown)
+        return;
+
+    // Hover: a gizmo handle first, then the closest landmark marker
+    hover_ = HandleUnder(x, y);
+    hoverLandmark_.reset();
+    if(hover_ != Handle::NONE)
+        return;
+    float best = kPickRadius;
+    for(const LandmarkRef& ref : AllLandmarks())
+    {
+        Vector3 p;
+        float sx, sy;
+        if(LandmarkWorld(ref, p) && ToScreen(p, sx, sy) && std::hypot(sx - x, sy - y) < best)
+        {
+            best = std::hypot(sx - x, sy - y);
+            hoverLandmark_ = ref;
+        }
+    }
+}
+
 void SceneEditor::MouseUp(SDL_Event* event)
 {
-    if(event->button.button == SDL_BUTTON_LEFT)
-        drag_ = Drag::NONE;
+    if(event->button.button == SDL_BUTTON_LEFT && dragging_ != Handle::NONE)
+    {
+        dragging_ = Handle::NONE;
+        pickedName_ = app_->getSelectedEntity().first != nullptr ? app_->getSelectedEntity().first->getName() : "";
+    }
 }
 
 // --- Keys ------------------------------------------------------------------------
@@ -510,21 +757,21 @@ bool SceneEditor::KeyDown(SDL_Event* event)
     bool shift = (event->key.keysym.mod & KMOD_SHIFT) != 0;
     bool ctrl = (event->key.keysym.mod & KMOD_CTRL) != 0;
 
-    if(key == SDLK_e && !ctrl)
+    if(key == SDLK_TAB)
     {
         active_ = !active_;
-        drag_ = Drag::NONE;
+        dragging_ = Handle::NONE;
         SetStatus(active_ ? "Edit mode on" : "Edit mode off");
         return true;
     }
     if(!active_)
         return false;
 
-    if(ctrl && key == SDLK_z)
-    {
-        Undo();
-        return true;
-    }
+    // Right mouse held: WASD/Q/E fly the camera, like Unity
+    if(SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_RMASK)
+        return false;
+
+    if(ctrl && key == SDLK_z) { Undo(); return true; }
     if(ctrl && key == SDLK_s)
     {
         std::string message;
@@ -532,10 +779,14 @@ bool SceneEditor::KeyDown(SDL_Event* event)
         SetStatus(message);
         return true;
     }
-    if(key == SDLK_DELETE || key == SDLK_BACKSPACE)
+    switch(key)
     {
-        RemoveSelectedLandmark();
-        return true;
+        case SDLK_q: tool_ = Tool::SELECT; return true;
+        case SDLK_w: tool_ = Tool::MOVE; return true;
+        case SDLK_e: tool_ = Tool::ROTATE; return true;
+        case SDLK_DELETE:
+        case SDLK_BACKSPACE: RemoveSelectedLandmark(); return true;
+        default: break;
     }
 
     // Nudge the selected landmark if there is one, otherwise the selected object
@@ -556,17 +807,22 @@ bool SceneEditor::KeyDown(SDL_Event* event)
         default:            return false;
     }
 
-    Vector3 p;
+    Vector3 p, c;
     if(selectedLandmark_ && yaw == 0 && LandmarkWorld(*selectedLandmark_, p))
     {
         PushUndo();
         MoveLandmark(*selectedLandmark_, p + delta);
     }
-    else if(!group_.empty())
+    else if(GroupCenter(c))
     {
         PushUndo();
         if(yaw != 0)
-            Rotate(yaw);
+        {
+            dragStartTransforms_.clear();
+            for(StaticEntity* e : group_)
+                dragStartTransforms_.push_back(e->getTransform());
+            RotateAbout(Vector3(0, 0, 1), yaw * M_PI / 180.0, c);
+        }
         else
             Translate(delta);
     }
@@ -625,29 +881,33 @@ void SceneEditor::DrawOverlay()
 void SceneEditor::DoHUD()
 {
     IMGUI* gui = app_->getGUI();
-    GLfloat w = 260.f;
+    SceneLandmarks& landmarks = sim_->getLandmarks();
+    GLfloat w = 270.f;
     GLfloat x = (GLfloat)app_->getWindowWidth() - w - 10.f;
-    GLfloat y = 10.f;
     Uid id;
     id.owner = kOwner;
 
-    SceneLandmarks& landmarks = sim_->getLandmarks();
     if(!active_)
     {
-        gui->DoPanel(x, y, w, 48.f);
-        gui->DoLabel(x + 5.f, y + 8.f, "Press E to edit the scene");
+        gui->DoPanel(x, 10.f, w, 48.f);
+        gui->DoLabel(x + 5.f, 18.f, "Press Tab to edit the scene");
         id.item = 10;
-        landmarks.setPublishing(gui->DoCheckBox(id, x + 5.f, y + 25.f, w - 10.f, landmarks.isPublishing(), "Publish landmarks"));
+        landmarks.setPublishing(gui->DoCheckBox(id, x + 5.f, 35.f, w - 10.f, landmarks.isPublishing(), "Publish landmarks"));
+        DrawProfileMenu(x, 63.f, w);
         return;
     }
 
-    // A new left click: on a landmark marker it selects that landmark, elsewhere it clears it
+    // A new left click: on a gizmo handle it starts a drag, on a landmark marker it selects
+    // that landmark, elsewhere it leaves the selection to the simulator's picking
     int mx, my;
     bool leftDown = (SDL_GetMouseState(&mx, &my) & SDL_BUTTON_LMASK) != 0;
-    if(leftDown && !leftWasDown_ && !gui->isAnyActive() && !(mx >= x && mx <= x + w && my <= 480))
+    bool overPanel = mx >= x && mx <= x + w && my <= (int)kPanelHeight + 10;
+    if(leftDown && !leftWasDown_ && !gui->isAnyActive() && !overPanel)
     {
-        pressOnLandmark_ = hoverLandmark_.has_value();
-        if(pressOnLandmark_)
+        Handle h = HandleUnder(mx, my);
+        if(h != Handle::NONE)
+            StartGizmoDrag(h, mx, my);
+        else if(hoverLandmark_)
             selectedLandmark_ = hoverLandmark_;
         else
             selectedLandmark_.reset();
@@ -655,33 +915,53 @@ void SceneEditor::DoHUD()
     leftWasDown_ = leftDown;
 
     UpdateSelection();
+    DrawGizmo();
     DrawOverlay();
+    DrawPanel();
+}
+
+void SceneEditor::DrawPanel()
+{
+    IMGUI* gui = app_->getGUI();
+    SceneLandmarks& landmarks = sim_->getLandmarks();
+    GLfloat w = 270.f;
+    GLfloat x = (GLfloat)app_->getWindowWidth() - w - 10.f;
+    GLfloat y = 10.f;
+    Uid id;
+    id.owner = kOwner;
+    char buf[256];
 
     size_t changes = moved_.size() + landmarksChanged_.size();
-    gui->DoPanel(x, y, w, 465.f);
+    gui->DoPanel(x, y, w, kPanelHeight);
     y += 5.f;
-    gui->DoLabel(x + 5.f, y, "SCENE EDITOR");
-    gui->DoLabel(x + w - 70.f, y, "E: exit");
+    gui->DoLabel(x + 5.f, y, changes ? "SCENE EDITOR  (unsaved)" : "SCENE EDITOR");
+    gui->DoLabel(x + w - 75.f, y, "Tab: exit");
     y += 20.f;
-    id.item = 10;
-    landmarks.setPublishing(gui->DoCheckBox(id, x + 5.f, y, w - 10.f, landmarks.isPublishing(), "Publish landmarks"));
-    y += 22.f;
 
-    char buf[256];
+    // Tools, like Unity's Q/W/E
+    const char* tools[] = {"Q Select", "W Move", "E Rotate"};
+    GLfloat bw = (w - 20.f) / 3.f;
+    for(int i = 0; i < 3; ++i)
+    {
+        id.item = 20 + i;
+        std::string title = (int)tool_ == i ? std::string("[") + tools[i] + "]" : tools[i];
+        if(gui->DoButton(id, x + 5.f + i * (bw + 5.f), y, bw, 22.f, title))
+            tool_ = (Tool)i;
+    }
+    y += 30.f;
+
     Vector3 c;
     if(selectedLandmark_)
     {
-        const SceneLandmark& l = sim_->getLandmarks().Of(selectedLandmark_->entity)[selectedLandmark_->index];
+        const SceneLandmark& l = landmarks.Of(selectedLandmark_->entity)[selectedLandmark_->index];
         snprintf(buf, sizeof(buf), "Landmark: %s", l.subtypeName.empty() ? l.typeName.c_str() : l.subtypeName.c_str());
-        gui->DoLabel(x + 5.f, y, buf);
-        y += 15.f;
-        snprintf(buf, sizeof(buf), "on %s", selectedLandmark_->entity.c_str());
         gui->DoLabel(x + 5.f, y, buf);
         y += 15.f;
         Vector3 p;
         LandmarkWorld(*selectedLandmark_, p);
-        snprintf(buf, sizeof(buf), "N %.2f  E %.2f  depth %.2f", (double)p.getX(), (double)p.getY(), (double)p.getZ());
-        gui->DoLabel(x + 5.f, y, buf);
+        snprintf(buf, sizeof(buf), "on %s   N %.2f E %.2f D %.2f", GroupOf(selectedLandmark_->entity).c_str(),
+                 (double)p.getX(), (double)p.getY(), (double)p.getZ());
+        gui->DoLabel(x + 5.f, y, buf, glm::vec4(-1.f), 0.9f);
         y += 17.f;
         id.item = 11;
         bool enabled = gui->DoCheckBox(id, x + 5.f, y, w - 10.f, l.enabled, "Publish this landmark");
@@ -693,40 +973,37 @@ void SceneEditor::DoHUD()
             landmarks.Set(selectedLandmark_->entity, ls);
             landmarksChanged_.insert(selectedLandmark_->entity);
         }
+        y += 20.f;
     }
     else if(GroupCenter(c))
     {
         size_t n = 0;
         for(StaticEntity* e : group_)
-            n += sim_->getLandmarks().Of(e->getName()).size();
-        snprintf(buf, sizeof(buf), "Object: %s (%zu part%s, %zu landmark%s)", groupName_.c_str(), group_.size(),
-                 group_.size() == 1 ? "" : "s", n, n == 1 ? "" : "s");
+            n += landmarks.Of(e->getName()).size();
+        snprintf(buf, sizeof(buf), "Object: %s (%zu landmark%s)", groupName_.c_str(), n, n == 1 ? "" : "s");
         gui->DoLabel(x + 5.f, y, buf);
         y += 15.f;
         snprintf(buf, sizeof(buf), "N %.2f  E %.2f  depth %.2f", (double)c.getX(), (double)c.getY(), (double)c.getZ());
-        gui->DoLabel(x + 5.f, y, buf);
-        y += 15.f;
+        gui->DoLabel(x + 5.f, y, buf, glm::vec4(-1.f), 0.9f);
+        y += 37.f;
     }
     else
     {
         gui->DoLabel(x + 5.f, y, "Click an object or a landmark (o)");
-        y += 30.f;
+        y += 52.f;
     }
-    y += 22.f;
 
-    // Help
     const char* help[] = {
-        "Drag: move     Shift+drag: up/down",
-        "Arrows, PgUp/PgDn: nudge (Shift: x10)",
-        ", and . : rotate      Del: remove landmark",
-        "Ctrl+Z: undo          Ctrl+S: save",
+        "Drag the arrows / rings (Ctrl: snap)",
+        "Right mouse: look, + WASD: fly",
+        "Del: remove landmark   Ctrl+Z: undo",
     };
     for(const char* line : help)
     {
         gui->DoLabel(x + 5.f, y, line, glm::vec4(0.75f, 0.75f, 0.75f, 1.f), 0.9f);
         y += 13.f;
     }
-    y += 10.f;
+    y += 8.f;
 
     // New landmark on the selected object
     std::vector<std::string> types;
@@ -784,8 +1061,33 @@ void SceneEditor::DoHUD()
     }
     y += 32.f;
 
+    id.item = 10;
+    landmarks.setPublishing(gui->DoCheckBox(id, x + 5.f, y, w - 10.f, landmarks.isPublishing(), "Publish landmarks"));
+    y += 20.f;
+    DrawProfileMenu(x, y, w);
+    y += 45.f;
+
     if(!status_.empty() && GetTimeInMicroseconds() - statusTime_ < 6000000)
         gui->DoLabel(x + 5.f, y, status_, glm::vec4(1.f, 0.85f, 0.4f, 1.f), 0.9f);
+}
+
+void SceneEditor::DrawProfileMenu(float x, float y, float w)
+{
+    // Detection errors of the published landmarks, the profiles robosub_dummy_publisher had
+    std::vector<std::string> names;
+    for(const DetectionProfile& p : SceneLandmarks::Profiles())
+        names.push_back(p.name);
+    Uid id;
+    id.owner = kOwner;
+    id.item = 12;
+    SceneLandmarks& landmarks = sim_->getLandmarks();
+    unsigned int chosen = app_->getGUI()->DoComboBox(id, x + 5.f, y, w - 10.f, names, (unsigned int)landmarks.getProfile(), "Detection profile");
+    if(chosen != landmarks.getProfile())
+    {
+        landmarks.setProfile(chosen);
+        profileChanged_ = true;
+        SetStatus("Detection profile: " + names[chosen] + (active_ ? " (save to keep)" : ""));
+    }
 }
 
 bool SceneEditor::Save(std::string& message)
@@ -855,6 +1157,19 @@ bool SceneEditor::Save(std::string& message)
         }
     }
 
+    // 3. Detection profile: the profile attribute of <ros_landmarks>
+    if(profileChanged_)
+        for(auto& [file, text] : texts)
+        {
+            size_t tag = text.find("<ros_landmarks");
+            if(tag == std::string::npos)
+                continue;
+            size_t end = text.find("/>", tag) + 2;
+            text.replace(tag, end - tag, SetAttribute(text.substr(tag, end - tag), "profile",
+                                                      SceneLandmarks::Profiles()[sim_->getLandmarks().getProfile()].name));
+            break;
+        }
+
     for(const auto& [file, text] : texts)
         if(text != ReadFile(file) && !WriteFile(file, text))
         {
@@ -864,6 +1179,7 @@ bool SceneEditor::Save(std::string& message)
 
     moved_.clear();
     landmarksChanged_.clear();
+    profileChanged_ = false;
     message = "Saved " + std::to_string(savedPoses) + " object pose(s), " + std::to_string(savedLandmarks) + " landmark(s)";
     return true;
 }

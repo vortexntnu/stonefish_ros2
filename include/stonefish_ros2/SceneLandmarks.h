@@ -23,6 +23,7 @@
 #include <Stonefish/StonefishCommon.h>
 #include <map>
 #include <optional>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -41,6 +42,33 @@ namespace sf
         std::optional<Vector3> point;   //!< In the object's frame. Empty = centre of the object's bounding box.
         std::optional<Vector3> normal;  //!< In the object's frame. Set = publish its yaw (surface normal).
         bool enabled = true;            //!< enabled="false" in the scene: kept, but not published.
+        bool downCamera = false;        //!< camera="down": seen by the down camera (bin floors, table items).
+    };
+
+    //! Detection errors, the profiles robosub_dummy_publisher had. [near, far] pairs go from a close,
+    //! centred view to the edge of the field of view.
+    struct DetectionProfile
+    {
+        std::string name;
+        bool useFieldOfView = false;
+        double frontRange = 8.0, frontHalfFovDeg = 45.0;
+        double downRadius = 1.5, downMaxAltitude = 3.0;
+        double nearRange = 2.0, centreHalfFovDeg = 15.0;
+        double positionNoise = 0.0;
+        double rangeNoiseAlong[2] = {0, 0};   //!< std [m] = base + per_m * distance
+        double rangeNoiseAcross[2] = {0, 0};
+        double offAxisNoiseGain = 0.0;
+        double rangeBiasPerM = 0.0;
+        double orientationNoiseDeg[2] = {0, 0};
+        double detectionProbability[2] = {1, 1};
+        double dropoutRatePerSec[2] = {0, 0};
+        double dropoutDurationSec[2] = {1, 5};
+        double outlierProbability[2] = {0, 0};
+        double outlierStd = 1.0;
+        double falsePositiveRate[2] = {0, 0};
+        double falsePositiveRadius = 2.0;
+        double classConfusionProbability[2] = {0, 0};
+        double frameDropProbability = 0.0;
     };
 
     class SceneLandmarks
@@ -48,8 +76,15 @@ namespace sf
     public:
         SceneLandmarks(SimulationManager* sm, const std::shared_ptr<rclcpp::Node>& nh);
 
-        //! Configure publishing from <ros_landmarks topic="" frame_id="" rate=""/>.
-        void Configure(const std::string& topic, const std::string& frameId, double rate);
+        //! Configure publishing from <ros_landmarks topic="" frame_id="" rate="" profile=""
+        //! front_camera="" down_camera=""/> (the cameras are sensor names, used by profiles with a field of view).
+        void Configure(const std::string& topic, const std::string& frameId, double rate,
+                       const std::string& profile, const std::string& frontCamera, const std::string& downCamera);
+
+        //! none, realistic, unstable, erratic.
+        static const std::vector<DetectionProfile>& Profiles();
+        void setProfile(size_t index) { profile_ = std::min(index, Profiles().size() - 1); }
+        size_t getProfile() const { return profile_; }
 
         //! Adds a landmark; returns false and leaves the list unchanged if the type or subtype is unknown.
         bool Add(const SceneLandmark& landmark, std::string& error);
@@ -82,6 +117,9 @@ namespace sf
     private:
         void Publish();
         bool EntityTransform(const std::string& name, Transform& T) const;
+        //! Whether the landmark is in view, and how good the view is: 0 close and centred, 1 at the edge.
+        bool InView(const SceneLandmark& l, const Vector3& p, double& badness, Vector3& viewDir, double& range) const;
+        double Lerp(const double v[2], double b) const { return v[0] + (v[1] - v[0]) * b; }
 
         SimulationManager* sm_;
         std::shared_ptr<rclcpp::Node> nh_;
@@ -90,6 +128,11 @@ namespace sf
         std::string frameId_;
         std::vector<SceneLandmark> landmarks_;
         bool publishing_ = true;
+        size_t profile_ = 0;
+        std::string frontCamera_, downCamera_;
+        std::mt19937 rng_{std::random_device{}()};
+        std::map<std::string, double> occludedUntil_; //!< dropouts, per landmark
+        double timerPeriod_ = 0.1;
     };
 }
 

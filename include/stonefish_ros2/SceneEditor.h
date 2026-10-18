@@ -11,9 +11,11 @@
 //  SceneEditor.h
 //  stonefish_ros2
 //
-//  Edit mode of the graphical simulator (toggle with E): select objects and
-//  drag them around the pool, see and drag their landmark points (like child
-//  empties in Unity), undo, and save the result back into the scenario files.
+//  Edit mode of the graphical simulator (Tab), working like the Unity scene
+//  view: click to select, Q/W/E for the select/move/rotate tools with gizmo
+//  handles, right mouse + WASD to fly. Landmarks are markers that can be
+//  selected and moved like child empties. Undo, and save back into the
+//  scenario files.
 //
 
 #ifndef __Stonefish_SceneEditor__
@@ -41,7 +43,7 @@ namespace sf
 
         bool isActive() const { return active_; }
 
-        //! Returns true if the key was used by the editor.
+        //! Returns true if the key was used by the editor (and must not reach the camera).
         bool KeyDown(SDL_Event* event);
         void MouseMove(SDL_Event* event);
         void MouseUp(SDL_Event* event);
@@ -51,6 +53,10 @@ namespace sf
         bool Save(std::string& message);
 
     private:
+        enum class Tool { SELECT, MOVE, ROTATE };
+        //! Gizmo handles: the three axes, the horizontal plane square, and the three rotation rings.
+        enum class Handle { NONE, AXIS_X, AXIS_Y, AXIS_Z, PLANE, RING_X, RING_Y, RING_Z };
+
         //! A landmark by its object and its index among that object's landmarks.
         struct LandmarkRef
         {
@@ -68,26 +74,39 @@ namespace sf
             std::set<std::string> landmarksChanged;
         };
 
-        enum class Drag { NONE, OBJECT, LANDMARK };
-
+        // Selection
         void UpdateSelection();
         void SelectGroup(const std::string& groupName);
         bool GroupBounds(Vector3& min, Vector3& max) const;
         bool GroupCenter(Vector3& center) const;
+
+        // Editing
         void Translate(const Vector3& delta);
-        void Rotate(Scalar yaw);
+        void RotateAbout(const Vector3& axis, Scalar angle, const Vector3& pivot);
         void MoveLandmark(const LandmarkRef& ref, const Vector3& worldPosition);
         bool LandmarkWorld(const LandmarkRef& ref, Vector3& p) const;
         std::vector<LandmarkRef> AllLandmarks() const;
-        bool StartDrag(int x, int y, const Vector3& through);
-        bool PlaneHit(int x, int y, Vector3& hit) const;
-        bool ToScreen(const Vector3& p, float& sx, float& sy) const;
         void AddLandmark();
         void RemoveLandmarks();
         void RemoveSelectedLandmark();
         void PushUndo();
         void Undo();
+
+        // Gizmo
+        bool GizmoCenter(Vector3& c) const;
+        Scalar GizmoSize(const Vector3& c) const;
+        Vector3 HandleAxis(Handle h) const;
+        Handle HandleUnder(int x, int y) const;
+        void StartGizmoDrag(Handle h, int x, int y);
+        void UpdateGizmoDrag(int x, int y, bool snap);
+        void DrawGizmo();
+
+        // Screen and picking
+        bool ToScreen(const Vector3& p, float& sx, float& sy) const;
+        bool PlaneHit(int x, int y, const Vector3& point, const Vector3& normal, Vector3& hit) const;
         void DrawOverlay();
+        void DrawPanel();
+        void DrawProfileMenu(float x, float y, float w);
         void SetStatus(const std::string& text);
 
         static std::string GroupOf(const std::string& entityName);
@@ -95,6 +114,7 @@ namespace sf
         GraphicalSimulationApp* app_;
         ROS2SimulationManager* sim_;
         bool active_ = false;
+        Tool tool_ = Tool::MOVE;
 
         // Selection: all static objects that share a name prefix before "__" (one per material)
         std::string groupName_;
@@ -103,20 +123,23 @@ namespace sf
         std::optional<LandmarkRef> selectedLandmark_;
         std::optional<LandmarkRef> hoverLandmark_;
 
-        // Mouse and dragging (on a plane: horizontal, or vertical with Shift)
+        // Mouse and gizmo dragging
         bool leftWasDown_ = false;
-        Drag drag_ = Drag::NONE;
-        bool pressOnLandmark_ = false;
-        bool dragVertical_ = false;
-        Vector3 planePoint_;
-        Vector3 planeNormal_;
-        Vector3 dragStart_;
-        Vector3 dragLandmarkStart_;
+        bool rightDown_ = false;
+        Handle hover_ = Handle::NONE;
+        Handle dragging_ = Handle::NONE;
+        int pressX_ = 0, pressY_ = 0;
+        Vector3 dragCenter_;
+        Vector3 dragHitStart_;
+        float dragAngleStart_ = 0.f;
+        Scalar dragRotationSign_ = 1;
         std::vector<Transform> dragStartTransforms_;
+        Vector3 dragLandmarkStart_;
 
         std::deque<Snapshot> undo_;
         std::set<std::string> moved_;
         std::set<std::string> landmarksChanged_;
+        bool profileChanged_ = false;
         unsigned int typeIndex_ = 0;
         unsigned int subtypeIndex_ = 0;
         std::string status_;
