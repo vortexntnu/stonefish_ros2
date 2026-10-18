@@ -30,8 +30,32 @@ namespace sf
 {
 
 ROS2GraphicalSimulationApp::ROS2GraphicalSimulationApp(std::string title, std::string dataPath, RenderSettings s, HelperSettings h, ROS2SimulationManager* sim)
-    : GraphicalSimulationApp(title, dataPath, s, h, sim)
+    : GraphicalSimulationApp(title, dataPath, s, h, sim), editor_(std::make_unique<SceneEditor>(this, sim))
 {
+}
+
+void ROS2GraphicalSimulationApp::DoHUD()
+{
+    GraphicalSimulationApp::DoHUD();
+    editor_->DoHUD();
+}
+
+void ROS2GraphicalSimulationApp::KeyDown(SDL_Event* event)
+{
+    if(!editor_->KeyDown(event))
+        GraphicalSimulationApp::KeyDown(event);
+}
+
+void ROS2GraphicalSimulationApp::MouseMove(SDL_Event* event)
+{
+    GraphicalSimulationApp::MouseMove(event);
+    editor_->MouseMove(event);
+}
+
+void ROS2GraphicalSimulationApp::MouseUp(SDL_Event* event)
+{
+    GraphicalSimulationApp::MouseUp(event);
+    editor_->MouseUp(event);
 }
 
 void ROS2GraphicalSimulationApp::Startup()
