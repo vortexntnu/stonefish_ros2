@@ -85,6 +85,7 @@ ROS2SimulationManager::ROS2SimulationManager(Scalar stepsPerSecond, std::string 
     it_ = std::make_shared<image_transport::ImageTransport>(nh_);
     interface_ = std::make_shared<ROS2Interface>(nh_);
     tf_ = std::make_unique<tf2_ros::TransformBroadcaster>(nh_);
+    landmarks_ = std::make_unique<SceneLandmarks>(this, nh_);
 }
 
 ROS2SimulationManager::~ROS2SimulationManager()
@@ -162,9 +163,20 @@ bool ROS2SimulationManager::RespawnROS2Robot(const std::string& robotName, const
     return false;
 }
 
+SceneLandmarks& ROS2SimulationManager::getLandmarks()
+{
+    return *landmarks_;
+}
+
+const std::string& ROS2SimulationManager::getScenarioPath() const
+{
+    return scenarioPath_;
+}
+
 void ROS2SimulationManager::BuildScenario()
 {
-    // Run parser
+    // Run parser (it registers the <landmark> tags again)
+    landmarks_->Clear();
     ROS2ScenarioParser parser(this, nh_);
     bool success = parser.Parse(scenarioPath_);
 

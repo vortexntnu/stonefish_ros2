@@ -190,7 +190,114 @@ bool ROS2ScenarioParser::PreProcess(XMLNode* root, const std::map<std::string, s
     if(!ReplaceROSVars(root))
         return false;
     //Then process include arguments
-    return ScenarioParser::PreProcess(root, args);
+    if(!ScenarioParser::PreProcess(root, args))
+        return false;
+
+    //Scene landmarks: <ros_landmarks topic="/orca/landmarks" frame_id="orca/odom" rate="10"/>
+    XMLElement* item = root->FirstChildElement("ros_landmarks");
+    if(item != nullptr)
+    {
+        const char* topic = nullptr;
+        const char* frameId = nullptr;
+        double rate = 10.0;
+        if(item->QueryStringAttribute("topic", &topic) != XML_SUCCESS
+           || item->QueryStringAttribute("frame_id", &frameId) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "<ros_landmarks> needs 'topic' and 'frame_id' attributes!");
+            return false;
+        }
+        item->QueryDoubleAttribute("rate", &rate);
+        ((ROS2SimulationManager*)getSimulationManager())->getLandmarks().Configure(topic, frameId, rate);
+    }
+    return true;
+}
+
+bool ROS2ScenarioParser::ParseStatic(XMLElement* element)
+{
+    return ScenarioParser::ParseStatic(element) && ParseLandmarks(element);
+}
+
+bool ROS2ScenarioParser::ParseDynamic(XMLElement* element)
+{
+    return ScenarioParser::ParseDynamic(element) && ParseLandmarks(element);
+}
+
+static bool ParseLandmarkVector(const char* text, Vector3& v)
+{
+    double x, y, z;
+    if(text == nullptr || sscanf(text, "%lf %lf %lf", &x, &y, &z) != 3)
+        return false;
+    v = Vector3(x, y, z);
+    return true;
+}
+
+bool ROS2ScenarioParser::IncludeFiles(XMLNode* node)
+{
+    if(!ScenarioParser::IncludeFiles(node))
+        return false;
+
+    //Standalone landmarks, anywhere in the scenario or its includes: <landmark object="name" .../>
+    for(XMLElement* item = node->FirstChildElement("landmark"); item != nullptr; item = item->NextSiblingElement("landmark"))
+    {
+        const char* object = nullptr;
+        if(item->QueryStringAttribute("object", &object) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "A <landmark> outside an object needs an 'object' attribute!");
+            return false;
+        }
+        if(!ParseLandmark(item, object))
+            return false;
+    }
+    return true;
+}
+
+/*
+    Landmarks published by SceneLandmarks, either inside a <static>/<dynamic> object or at the
+    top level with object="name":
+        <landmark type="GATE" subtype="GATE_SEARCH_RESCUE" point="x y z" normal="x y z"/>
+    point (optional) is in the object's frame, default is the centre of its bounding box.
+    normal (optional, object frame) publishes its yaw, e.g. the front face of a board.
+*/
+bool ROS2ScenarioParser::ParseLandmarks(XMLElement* element)
+{
+    const char* name = nullptr;
+    if(element->QueryStringAttribute("name", &name) != XML_SUCCESS)
+        return true;
+
+    for(XMLElement* item = element->FirstChildElement("landmark"); item != nullptr; item = item->NextSiblingElement("landmark"))
+        if(!ParseLandmark(item, name))
+            return false;
+    return true;
+}
+
+bool ROS2ScenarioParser::ParseLandmark(XMLElement* item, const std::string& objectName)
+{
+    SceneLandmark l;
+    l.entityName = objectName;
+    const char* type = nullptr;
+    const char* subtype = nullptr;
+    if(item->QueryStringAttribute("type", &type) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Landmark of '%s' has no type!", objectName.c_str());
+        return false;
+    }
+    l.typeName = type;
+    if(item->QueryStringAttribute("subtype", &subtype) == XML_SUCCESS)
+        l.subtypeName = subtype;
+
+    Vector3 v;
+    if(ParseLandmarkVector(item->Attribute("point"), v))
+        l.point = v;
+    if(ParseLandmarkVector(item->Attribute("normal"), v))
+        l.normal = v;
+
+    std::string error;
+    if(!((ROS2SimulationManager*)getSimulationManager())->getLandmarks().Add(l, error))
+    {
+        log.Print(MessageType::ERROR, "Landmark of '%s': %s!", objectName.c_str(), error.c_str());
+        return false;
+    }
+    return true;
 }
 
 VelocityField* ROS2ScenarioParser::ParseVelocityField(XMLElement* element)

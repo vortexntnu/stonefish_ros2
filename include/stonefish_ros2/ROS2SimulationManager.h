@@ -44,6 +44,7 @@
 #include "stonefish_ros2/srv/sonar_settings.hpp"
 #include "stonefish_ros2/srv/sonar_settings2.hpp"
 #include "stonefish_ros2/srv/respawn.hpp"
+#include "stonefish_ros2/SceneLandmarks.h"
 
 #include <Stonefish/core/SimulationManager.h>
 #include <Stonefish/actuators/Servo.h>
@@ -126,6 +127,8 @@ namespace sf
         std::map<std::string, rclcpp::PublisherBase::SharedPtr>& getPublishers();
         std::map<std::string, image_transport::Publisher>& getImagePublishers();
         std::map<std::string, rclcpp::SubscriptionBase::SharedPtr>& getSubscribers();
+        SceneLandmarks& getLandmarks();
+        const std::string& getScenarioPath() const;
         std::shared_ptr<image_transport::ImageTransport> getImageTransportHandle();
         std::map<std::string, std::pair<sensor_msgs::msg::Image::SharedPtr, sensor_msgs::msg::CameraInfo::SharedPtr>>& getCameraMsgPrototypes();
         std::map<std::string, std::tuple<sensor_msgs::msg::Image::SharedPtr, sensor_msgs::msg::CameraInfo::SharedPtr, sensor_msgs::msg::Image::SharedPtr>>& getDualImageCameraMsgPrototypes();
@@ -180,6 +183,7 @@ namespace sf
         std::shared_ptr<image_transport::ImageTransport> it_;
         std::unique_ptr<tf2_ros::TransformBroadcaster> tf_;
         std::shared_ptr<ROS2Interface> interface_;
+        std::unique_ptr<SceneLandmarks> landmarks_;
         std::map<std::string, rclcpp::ServiceBase::SharedPtr> srvs_;
         std::map<std::string, rclcpp::PublisherBase::SharedPtr> pubs_;
         std::map<std::string, rclcpp::SubscriptionBase::SharedPtr> subs_;

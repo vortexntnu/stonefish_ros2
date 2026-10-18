@@ -21,6 +21,7 @@ find_package(pcl_conversions REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(vortex_msgs REQUIRED)
 find_package(Stonefish REQUIRED 1.6.0)
 
 # messages
@@ -54,6 +55,7 @@ add_library(stonefish_ros2_interface SHARED
   src/${PROJECT_NAME}/ROS2SimulationManager.cpp
   src/${PROJECT_NAME}/ROS2ScenarioParser.cpp
   src/${PROJECT_NAME}/ROS2Interface.cpp
+  src/${PROJECT_NAME}/SceneLandmarks.cpp
 )
 target_link_libraries(stonefish_ros2_interface Stonefish::Stonefish "${cpp_typesupport_target}")
 target_include_directories(stonefish_ros2_interface
@@ -74,6 +76,7 @@ ament_target_dependencies(stonefish_ros2_interface
  image_transport
  tf2
  tf2_ros
+ vortex_msgs
 )
 ament_export_libraries(stonefish_ros2_interface)
 ament_export_include_directories(include)

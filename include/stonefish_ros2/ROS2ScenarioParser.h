@@ -40,6 +40,9 @@ namespace sf
 
    protected:
         virtual bool PreProcess(XMLNode* root, const std::map<std::string, std::string>& args);
+        virtual bool IncludeFiles(XMLNode* node);
+        virtual bool ParseStatic(XMLElement* element);
+        virtual bool ParseDynamic(XMLElement* element);
         virtual VelocityField* ParseVelocityField(XMLElement* element);
         virtual bool ParseRobot(XMLElement* element);
         virtual bool ParseAnimated(XMLElement* element);
@@ -53,6 +56,8 @@ namespace sf
     private:
         std::string SubstituteROSVars(const std::string& value);
         bool ReplaceROSVars(XMLNode* node);
+        bool ParseLandmarks(XMLElement* element);
+        bool ParseLandmark(XMLElement* item, const std::string& objectName);
 
         std::shared_ptr<rclcpp::Node> nh_;
     };
