@@ -46,7 +46,7 @@ namespace
     const int kRingSegments = 48;
     const Scalar kSnapMove = 0.1;     // [m] with Ctrl
     const Scalar kSnapAngleDeg = 15.0;
-    const float kPanelHeight = 520.f;
+    const float kPanelHeight = 590.f;
 
     std::string ReadFile(const std::string& path)
     {
@@ -873,7 +873,7 @@ void SceneEditor::DrawOverlay()
         gui->DoLabel(sx - 5.f, sy - 8.f, selected ? "[o]" : "o", color, selected ? 1.2f : 1.f);
         if(selected || hovered || onSelection)
         {
-            std::string label = l.subtypeName.empty() ? l.typeName : l.subtypeName;
+            std::string label = l.subtypeName.empty() ? l.typeName : l.typeName + " / " + l.subtypeName;
             gui->DoLabel(sx + 10.f, sy - 6.f, l.enabled ? label : label + " (off)", selected ? yellow : (published ? white : grey), 0.9f);
         }
     }
@@ -1025,7 +1025,23 @@ void SceneEditor::DrawPanel()
         y += 15.f;
         snprintf(buf, sizeof(buf), "N %.2f  E %.2f  depth %.2f", (double)c.getX(), (double)c.getY(), (double)c.getZ());
         gui->DoLabel(x + 5.f, y, buf, glm::vec4(-1.f), 0.9f);
-        y += 37.f;
+        y += 15.f;
+        // Its landmarks: type / subtype (click a marker to edit one)
+        size_t shown = 0;
+        for(StaticEntity* e : group_)
+            for(const SceneLandmark& l : landmarks.Of(e->getName()))
+                if(shown++ < 4)
+                {
+                    std::string line = "  " + l.typeName + (l.subtypeName.empty() ? "" : " / " + l.subtypeName) + (l.enabled ? "" : " (off)");
+                    gui->DoLabel(x + 5.f, y, line, glm::vec4(0.2f, 0.9f, 1.f, 1.f), 0.85f);
+                    y += 13.f;
+                }
+        if(shown > 4)
+        {
+            gui->DoLabel(x + 5.f, y, "  ... " + std::to_string(shown - 4) + " more", glm::vec4(0.2f, 0.9f, 1.f, 1.f), 0.85f);
+            y += 13.f;
+        }
+        y += 8.f;
     }
     else
     {
