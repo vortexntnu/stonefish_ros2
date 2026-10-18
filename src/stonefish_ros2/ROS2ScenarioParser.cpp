@@ -212,6 +212,14 @@ bool ROS2ScenarioParser::PreProcess(XMLNode* root, const std::map<std::string, s
         ((ROS2SimulationManager*)getSimulationManager())->getLandmarks().Configure(
             topic, frameId, rate, attr("profile"), attr("front_camera"), attr("down_camera"));
     }
+
+    //The waypoint the vehicle is going to, drawn in the 3D view: <ros_waypoint topic="/orca/debug/waypoint"/>
+    if((item = root->FirstChildElement("ros_waypoint")) != nullptr)
+    {
+        const char* topic = nullptr;
+        if(item->QueryStringAttribute("topic", &topic) == XML_SUCCESS)
+            ((ROS2SimulationManager*)getSimulationManager())->SubscribeWaypoint(topic);
+    }
     return true;
 }
 

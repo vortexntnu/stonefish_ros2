@@ -45,6 +45,8 @@
 #include "stonefish_ros2/srv/sonar_settings2.hpp"
 #include "stonefish_ros2/srv/respawn.hpp"
 #include "stonefish_ros2/SceneLandmarks.h"
+#include "vortex_msgs/msg/waypoint.hpp"
+#include <mutex>
 
 #include <Stonefish/core/SimulationManager.h>
 #include <Stonefish/actuators/Servo.h>
@@ -128,6 +130,10 @@ namespace sf
         std::map<std::string, image_transport::Publisher>& getImagePublishers();
         std::map<std::string, rclcpp::SubscriptionBase::SharedPtr>& getSubscribers();
         SceneLandmarks& getLandmarks();
+        //! Shows the waypoint the vehicle is going to (<ros_waypoint topic=""/>).
+        void SubscribeWaypoint(const std::string& topic);
+        //! The latest waypoint, in the world frame; false if none has been received.
+        bool getWaypoint(Vector3& position);
         const std::string& getScenarioPath() const;
         std::shared_ptr<image_transport::ImageTransport> getImageTransportHandle();
         std::map<std::string, std::pair<sensor_msgs::msg::Image::SharedPtr, sensor_msgs::msg::CameraInfo::SharedPtr>>& getCameraMsgPrototypes();
@@ -184,6 +190,9 @@ namespace sf
         std::unique_ptr<tf2_ros::TransformBroadcaster> tf_;
         std::shared_ptr<ROS2Interface> interface_;
         std::unique_ptr<SceneLandmarks> landmarks_;
+        rclcpp::Subscription<vortex_msgs::msg::Waypoint>::SharedPtr waypointSub_;
+        std::optional<Vector3> waypoint_;
+        std::mutex waypointMutex_;
         std::map<std::string, rclcpp::ServiceBase::SharedPtr> srvs_;
         std::map<std::string, rclcpp::PublisherBase::SharedPtr> pubs_;
         std::map<std::string, rclcpp::SubscriptionBase::SharedPtr> subs_;

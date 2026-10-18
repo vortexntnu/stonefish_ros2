@@ -168,6 +168,25 @@ SceneLandmarks& ROS2SimulationManager::getLandmarks()
     return *landmarks_;
 }
 
+void ROS2SimulationManager::SubscribeWaypoint(const std::string& topic)
+{
+    // The waypoint is published in the odom frame, which is the simulator's world frame
+    waypointSub_ = nh_->create_subscription<vortex_msgs::msg::Waypoint>(topic, rclcpp::QoS(10).best_effort(),
+        [this](const vortex_msgs::msg::Waypoint::SharedPtr msg) {
+            std::lock_guard<std::mutex> lock(waypointMutex_);
+            waypoint_ = Vector3(msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
+        });
+}
+
+bool ROS2SimulationManager::getWaypoint(Vector3& position)
+{
+    std::lock_guard<std::mutex> lock(waypointMutex_);
+    if(!waypoint_)
+        return false;
+    position = *waypoint_;
+    return true;
+}
+
 const std::string& ROS2SimulationManager::getScenarioPath() const
 {
     return scenarioPath_;

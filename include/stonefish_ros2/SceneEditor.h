@@ -107,6 +107,7 @@ namespace sf
         void DrawOverlay();
         void DrawPanel();
         void DrawProfileMenu(float x, float y, float w);
+        void DrawWaypoint();
         void SetStatus(const std::string& text);
 
         static std::string GroupOf(const std::string& entityName);

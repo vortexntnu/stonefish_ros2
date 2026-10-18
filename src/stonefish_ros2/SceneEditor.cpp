@@ -22,6 +22,7 @@
 #include <Stonefish/graphics/IMGUI.h>
 #include <Stonefish/graphics/OpenGLContent.h>
 #include <Stonefish/graphics/OpenGLPipeline.h>
+#include <Stonefish/graphics/OpenGLState.h>
 #include <Stonefish/graphics/OpenGLTrackball.h>
 #include <Stonefish/utils/SystemUtil.hpp>
 #include <algorithm>
@@ -629,8 +630,9 @@ void SceneEditor::DrawGizmo()
     OpenGLContent* content = app_->getGLPipeline()->getContent();
     OpenGLTrackball* trackball = sim_->getTrackball();
     content->SetCurrentView(trackball);
-    GLboolean depth = glIsEnabled(GL_DEPTH_TEST);
-    glDisable(GL_DEPTH_TEST); // handles are always on top, like in Unity
+    // The GUI pass (depth test off) keeps its vertex array bound for its own drawing
+    GLint guiVertexArray;
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &guiVertexArray);
 
     Scalar L = GizmoSize(c);
     glm::vec3 C((float)c.getX(), (float)c.getY(), (float)c.getZ());
@@ -700,8 +702,7 @@ void SceneEditor::DrawGizmo()
         }
     }
 
-    if(depth)
-        glEnable(GL_DEPTH_TEST);
+    OpenGLState::BindVertexArray(guiVertexArray);
 }
 
 // --- Mouse -----------------------------------------------------------------------
@@ -878,8 +879,31 @@ void SceneEditor::DrawOverlay()
     }
 }
 
+void SceneEditor::DrawWaypoint()
+{
+    // Where the vehicle is going: a marker, and a line down from the surface to show its depth.
+    // Drawn on the main window only, so it never shows in the vehicle's camera images.
+    Vector3 w;
+    float sx, sy;
+    if(!sim_->getWaypoint(w) || !ToScreen(w, sx, sy))
+        return;
+    OpenGLContent* content = app_->getGLPipeline()->getContent();
+    content->SetCurrentView(sim_->getTrackball());
+    GLint guiVertexArray;
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &guiVertexArray);
+    std::vector<glm::vec3> pole = {glm::vec3((float)w.getX(), (float)w.getY(), 0.f),
+                                   glm::vec3((float)w.getX(), (float)w.getY(), (float)w.getZ())};
+    content->DrawPrimitives(PrimitiveType::LINES, &pole, glm::vec4(1.f, 0.3f, 1.f, 1.f));
+    OpenGLState::BindVertexArray(guiVertexArray);
+    char buf[64];
+    snprintf(buf, sizeof(buf), "waypoint (depth %.2f)", (double)w.getZ());
+    app_->getGUI()->DoLabel(sx - 6.f, sy - 9.f, "X", glm::vec4(1.f, 0.3f, 1.f, 1.f), 1.4f);
+    app_->getGUI()->DoLabel(sx + 10.f, sy - 7.f, buf, glm::vec4(1.f, 0.6f, 1.f, 1.f), 0.9f);
+}
+
 void SceneEditor::DoHUD()
 {
+    DrawWaypoint();
     IMGUI* gui = app_->getGUI();
     SceneLandmarks& landmarks = sim_->getLandmarks();
     GLfloat w = 270.f;
