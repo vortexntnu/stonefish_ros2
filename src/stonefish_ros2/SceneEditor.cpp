@@ -866,7 +866,7 @@ void SceneEditor::DrawOverlay()
         bool selected = selectedLandmark_ && *selectedLandmark_ == ref;
         bool hovered = hoverLandmark_ && *hoverLandmark_ == ref;
         bool onSelection = !groupName_.empty() && GroupOf(ref.entity) == groupName_;
-        const SceneLandmark& l = sim_->getLandmarks().Of(ref.entity)[ref.index];
+        SceneLandmark l = sim_->getLandmarks().Of(ref.entity)[ref.index]; // a copy: Of() returns a temporary
         // Grey: not published (this landmark, or all of them, switched off)
         bool published = l.enabled && sim_->getLandmarks().isPublishing();
         glm::vec4 color = selected ? yellow : (hovered ? white : (published ? cyan : grey));
@@ -990,8 +990,11 @@ void SceneEditor::DrawPanel()
     Vector3 c;
     if(selectedLandmark_)
     {
-        const SceneLandmark& l = landmarks.Of(selectedLandmark_->entity)[selectedLandmark_->index];
-        snprintf(buf, sizeof(buf), "Landmark: %s", l.subtypeName.empty() ? l.typeName.c_str() : l.subtypeName.c_str());
+        SceneLandmark l = landmarks.Of(selectedLandmark_->entity)[selectedLandmark_->index]; // a copy: Of() returns a temporary
+        snprintf(buf, sizeof(buf), "Landmark type: %s", l.typeName.c_str());
+        gui->DoLabel(x + 5.f, y, buf);
+        y += 15.f;
+        snprintf(buf, sizeof(buf), "Subtype: %s", l.subtypeName.empty() ? "(none)" : l.subtypeName.c_str());
         gui->DoLabel(x + 5.f, y, buf);
         y += 15.f;
         Vector3 p;
@@ -1010,7 +1013,7 @@ void SceneEditor::DrawPanel()
             landmarks.Set(selectedLandmark_->entity, ls);
             landmarksChanged_.insert(selectedLandmark_->entity);
         }
-        y += 20.f;
+        y += 28.f;
     }
     else if(GroupCenter(c))
     {
@@ -1042,29 +1045,58 @@ void SceneEditor::DrawPanel()
     }
     y += 8.f;
 
-    // New landmark on the selected object
+    // Type and subtype: of the selected landmark (like an inspector), otherwise of a new landmark
     std::vector<std::string> types;
     for(const auto& [name, value] : SceneLandmarks::TypeNames())
         types.push_back(name);
+    auto subtypesOf = [](const std::string& type) {
+        std::vector<std::string> names;
+        auto sub = SceneLandmarks::SubtypeNames().find(type);
+        if(sub != SceneLandmarks::SubtypeNames().end())
+            for(const auto& [name, value] : sub->second)
+                names.push_back(name);
+        return names;
+    };
+    std::optional<SceneLandmark> editing;
+    if(selectedLandmark_)
+    {
+        editing = landmarks.Of(selectedLandmark_->entity)[selectedLandmark_->index];
+        typeIndex_ = (unsigned int)(std::find(types.begin(), types.end(), editing->typeName) - types.begin());
+        std::vector<std::string> subs = subtypesOf(editing->typeName);
+        subtypeIndex_ = (unsigned int)(std::find(subs.begin(), subs.end(), editing->subtypeName) - subs.begin());
+    }
     id.item = 0;
-    unsigned int newType = gui->DoComboBox(id, x + 5.f, y, w - 10.f, types, typeIndex_, "New landmark type");
-    if(newType != typeIndex_)
+    unsigned int newType = gui->DoComboBox(id, x + 5.f, y, w - 10.f, types, typeIndex_, editing ? "Type of this landmark" : "New landmark type");
+    bool changed = newType != typeIndex_;
+    if(changed)
     {
         typeIndex_ = newType;
         subtypeIndex_ = 0;
     }
     y += 45.f;
 
-    std::vector<std::string> subtypes;
-    auto sub = SceneLandmarks::SubtypeNames().find(types[typeIndex_]);
-    if(sub != SceneLandmarks::SubtypeNames().end())
-        for(const auto& [name, value] : sub->second)
-            subtypes.push_back(name);
+    std::vector<std::string> subtypes = subtypesOf(types[typeIndex_]);
     if(subtypes.empty())
         subtypes.push_back("(none)");
     id.item = 1;
-    subtypeIndex_ = std::min(gui->DoComboBox(id, x + 5.f, y, w - 10.f, subtypes, subtypeIndex_, "Subtype"), (unsigned int)subtypes.size() - 1);
+    unsigned int newSubtype = std::min(gui->DoComboBox(id, x + 5.f, y, w - 10.f, subtypes, std::min(subtypeIndex_, (unsigned int)subtypes.size() - 1), "Subtype"),
+                                       (unsigned int)subtypes.size() - 1);
+    changed = changed || newSubtype != subtypeIndex_;
+    subtypeIndex_ = newSubtype;
     y += 45.f;
+
+    if(editing && changed)
+    {
+        PushUndo();
+        std::vector<SceneLandmark> ls = landmarks.Of(selectedLandmark_->entity);
+        SceneLandmark& l = ls[selectedLandmark_->index];
+        l.typeName = types[typeIndex_];
+        l.type = SceneLandmarks::TypeNames().at(l.typeName);
+        l.subtypeName = subtypes[subtypeIndex_] == "(none)" ? "" : subtypes[subtypeIndex_];
+        l.subtype = l.subtypeName.empty() ? 0 : SceneLandmarks::SubtypeNames().at(l.typeName).at(l.subtypeName);
+        landmarks.Set(selectedLandmark_->entity, ls);
+        landmarksChanged_.insert(selectedLandmark_->entity);
+    }
 
     GLfloat half = (w - 15.f) / 2.f;
     id.item = 2;
