@@ -174,16 +174,17 @@ void ROS2SimulationManager::SubscribeWaypoint(const std::string& topic)
     waypointSub_ = nh_->create_subscription<vortex_msgs::msg::Waypoint>(topic, rclcpp::QoS(10).best_effort(),
         [this](const vortex_msgs::msg::Waypoint::SharedPtr msg) {
             std::lock_guard<std::mutex> lock(waypointMutex_);
-            waypoint_ = Vector3(msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
+            const auto& q = msg->pose.orientation;
+            waypoint_ = Transform(Quaternion(q.x, q.y, q.z, q.w), Vector3(msg->pose.position.x, msg->pose.position.y, msg->pose.position.z));
         });
 }
 
-bool ROS2SimulationManager::getWaypoint(Vector3& position)
+bool ROS2SimulationManager::getWaypoint(Transform& pose)
 {
     std::lock_guard<std::mutex> lock(waypointMutex_);
     if(!waypoint_)
         return false;
-    position = *waypoint_;
+    pose = *waypoint_;
     return true;
 }
 

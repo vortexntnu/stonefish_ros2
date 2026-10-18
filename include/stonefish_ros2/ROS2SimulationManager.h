@@ -132,8 +132,8 @@ namespace sf
         SceneLandmarks& getLandmarks();
         //! Shows the waypoint the vehicle is going to (<ros_waypoint topic=""/>).
         void SubscribeWaypoint(const std::string& topic);
-        //! The latest waypoint, in the world frame; false if none has been received.
-        bool getWaypoint(Vector3& position);
+        //! The latest waypoint pose, in the world frame; false if none has been received.
+        bool getWaypoint(Transform& pose);
         const std::string& getScenarioPath() const;
         std::shared_ptr<image_transport::ImageTransport> getImageTransportHandle();
         std::map<std::string, std::pair<sensor_msgs::msg::Image::SharedPtr, sensor_msgs::msg::CameraInfo::SharedPtr>>& getCameraMsgPrototypes();
@@ -191,7 +191,7 @@ namespace sf
         std::shared_ptr<ROS2Interface> interface_;
         std::unique_ptr<SceneLandmarks> landmarks_;
         rclcpp::Subscription<vortex_msgs::msg::Waypoint>::SharedPtr waypointSub_;
-        std::optional<Vector3> waypoint_;
+        std::optional<Transform> waypoint_;
         std::mutex waypointMutex_;
         std::map<std::string, rclcpp::ServiceBase::SharedPtr> srvs_;
         std::map<std::string, rclcpp::PublisherBase::SharedPtr> pubs_;

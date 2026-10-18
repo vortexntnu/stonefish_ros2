@@ -881,24 +881,37 @@ void SceneEditor::DrawOverlay()
 
 void SceneEditor::DrawWaypoint()
 {
-    // Where the vehicle is going: a marker, and a line down from the surface to show its depth.
-    // Drawn on the main window only, so it never shows in the vehicle's camera images.
-    Vector3 w;
+    // Where the vehicle is going: an arrow along the waypoint's heading (its x axis), and a line down
+    // from the surface to show its depth. Main window only, so it never shows in the camera images.
+    Transform pose;
     float sx, sy;
-    if(!sim_->getWaypoint(w) || !ToScreen(w, sx, sy))
+    if(!sim_->getWaypoint(pose) || !ToScreen(pose.getOrigin(), sx, sy))
         return;
+    Vector3 w = pose.getOrigin();
+    Vector3 forward = pose.getBasis().getColumn(0);
+    Vector3 side = pose.getBasis().getColumn(1);
+    auto gl = [](const Vector3& v) { return glm::vec3((float)v.getX(), (float)v.getY(), (float)v.getZ()); };
+    const Scalar L = 0.6; // [m] arrow length
+    std::vector<glm::vec3> lines = {
+        gl(Vector3(w.getX(), w.getY(), 0)), gl(w),                               // depth line
+        gl(w), gl(w + forward * L),                                                // shaft
+        gl(w + forward * L), gl(w + forward * (L * 0.75) + side * (L * 0.15)),    // head
+        gl(w + forward * L), gl(w + forward * (L * 0.75) - side * (L * 0.15)),
+    };
+
     OpenGLContent* content = app_->getGLPipeline()->getContent();
     content->SetCurrentView(sim_->getTrackball());
     GLint guiVertexArray;
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &guiVertexArray);
-    std::vector<glm::vec3> pole = {glm::vec3((float)w.getX(), (float)w.getY(), 0.f),
-                                   glm::vec3((float)w.getX(), (float)w.getY(), (float)w.getZ())};
-    content->DrawPrimitives(PrimitiveType::LINES, &pole, glm::vec4(1.f, 0.3f, 1.f, 1.f));
+    content->DrawPrimitives(PrimitiveType::LINES, &lines, glm::vec4(1.f, 0.3f, 1.f, 1.f));
     OpenGLState::BindVertexArray(guiVertexArray);
+
+    Scalar yaw, pitch, roll;
+    pose.getBasis().getEulerYPR(yaw, pitch, roll);
     char buf[64];
-    snprintf(buf, sizeof(buf), "waypoint (depth %.2f)", (double)w.getZ());
+    snprintf(buf, sizeof(buf), "waypoint (depth %.2f, yaw %.0f)", (double)w.getZ(), yaw * 180.0 / M_PI);
     app_->getGUI()->DoLabel(sx - 6.f, sy - 9.f, "X", glm::vec4(1.f, 0.3f, 1.f, 1.f), 1.4f);
-    app_->getGUI()->DoLabel(sx + 10.f, sy - 7.f, buf, glm::vec4(1.f, 0.6f, 1.f, 1.f), 0.9f);
+    app_->getGUI()->DoLabel(sx - 20.f, sy + 10.f, buf, glm::vec4(1.f, 0.6f, 1.f, 1.f), 0.9f); // below, clear of the arrow
 }
 
 void SceneEditor::DoHUD()
