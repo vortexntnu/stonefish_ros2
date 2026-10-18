@@ -64,6 +64,9 @@ namespace sf
 
         const std::vector<SceneLandmark>& All() const { return landmarks_; }
 
+        //! Replace every landmark (undo in the scene editor).
+        void SetAll(const std::vector<SceneLandmark>& landmarks) { landmarks_ = landmarks; }
+
         //! World position of a landmark, or false if its object does not exist.
         bool WorldPosition(const SceneLandmark& landmark, Vector3& position) const;
 
