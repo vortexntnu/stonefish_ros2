@@ -40,6 +40,7 @@ namespace sf
         uint16_t subtype;
         std::optional<Vector3> point;   //!< In the object's frame. Empty = centre of the object's bounding box.
         std::optional<Vector3> normal;  //!< In the object's frame. Set = publish its yaw (surface normal).
+        bool enabled = true;            //!< enabled="false" in the scene: kept, but not published.
     };
 
     class SceneLandmarks
@@ -64,6 +65,10 @@ namespace sf
 
         const std::vector<SceneLandmark>& All() const { return landmarks_; }
 
+        //! All landmark publishing on or off (on by default).
+        void setPublishing(bool on) { publishing_ = on; }
+        bool isPublishing() const { return publishing_; }
+
         //! Replace every landmark (undo in the scene editor).
         void SetAll(const std::vector<SceneLandmark>& landmarks) { landmarks_ = landmarks; }
 
@@ -84,6 +89,7 @@ namespace sf
         rclcpp::TimerBase::SharedPtr timer_;
         std::string frameId_;
         std::vector<SceneLandmark> landmarks_;
+        bool publishing_ = true;
     };
 }
 

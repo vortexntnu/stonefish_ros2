@@ -122,6 +122,8 @@ namespace
             line += " point=\"" + Format(l.point->getX(), l.point->getY(), l.point->getZ()) + "\"";
         if(l.normal)
             line += " normal=\"" + Format(l.normal->getX(), l.normal->getY(), l.normal->getZ()) + "\"";
+        if(!l.enabled)
+            line += " enabled=\"false\"";
         return line + "/>\n";
     }
 
@@ -580,6 +582,7 @@ void SceneEditor::DrawOverlay()
     const glm::vec4 cyan(0.2f, 0.9f, 1.f, 1.f);
     const glm::vec4 white(1.f, 1.f, 1.f, 1.f);
     const glm::vec4 yellow(1.f, 1.f, 0.2f, 1.f);
+    const glm::vec4 grey(0.55f, 0.55f, 0.55f, 1.f);
     float sx, sy;
 
     // Selected object: its bounding box corners and its name above it
@@ -606,11 +609,15 @@ void SceneEditor::DrawOverlay()
         bool selected = selectedLandmark_ && *selectedLandmark_ == ref;
         bool hovered = hoverLandmark_ && *hoverLandmark_ == ref;
         bool onSelection = !groupName_.empty() && GroupOf(ref.entity) == groupName_;
-        gui->DoLabel(sx - 5.f, sy - 8.f, selected ? "[o]" : "o", selected ? yellow : (hovered ? white : cyan), selected ? 1.2f : 1.f);
+        const SceneLandmark& l = sim_->getLandmarks().Of(ref.entity)[ref.index];
+        // Grey: not published (this landmark, or all of them, switched off)
+        bool published = l.enabled && sim_->getLandmarks().isPublishing();
+        glm::vec4 color = selected ? yellow : (hovered ? white : (published ? cyan : grey));
+        gui->DoLabel(sx - 5.f, sy - 8.f, selected ? "[o]" : "o", color, selected ? 1.2f : 1.f);
         if(selected || hovered || onSelection)
         {
-            const SceneLandmark& l = sim_->getLandmarks().Of(ref.entity)[ref.index];
-            gui->DoLabel(sx + 10.f, sy - 6.f, l.subtypeName.empty() ? l.typeName : l.subtypeName, selected ? yellow : white, 0.9f);
+            std::string label = l.subtypeName.empty() ? l.typeName : l.subtypeName;
+            gui->DoLabel(sx + 10.f, sy - 6.f, l.enabled ? label : label + " (off)", selected ? yellow : (published ? white : grey), 0.9f);
         }
     }
 }
@@ -624,17 +631,20 @@ void SceneEditor::DoHUD()
     Uid id;
     id.owner = kOwner;
 
+    SceneLandmarks& landmarks = sim_->getLandmarks();
     if(!active_)
     {
-        gui->DoPanel(x, y, w, 28.f);
+        gui->DoPanel(x, y, w, 48.f);
         gui->DoLabel(x + 5.f, y + 8.f, "Press E to edit the scene");
+        id.item = 10;
+        landmarks.setPublishing(gui->DoCheckBox(id, x + 5.f, y + 25.f, w - 10.f, landmarks.isPublishing(), "Publish landmarks"));
         return;
     }
 
     // A new left click: on a landmark marker it selects that landmark, elsewhere it clears it
     int mx, my;
     bool leftDown = (SDL_GetMouseState(&mx, &my) & SDL_BUTTON_LMASK) != 0;
-    if(leftDown && !leftWasDown_ && !gui->isAnyActive() && !(mx >= x && mx <= x + w && my <= 420))
+    if(leftDown && !leftWasDown_ && !gui->isAnyActive() && !(mx >= x && mx <= x + w && my <= 480))
     {
         pressOnLandmark_ = hoverLandmark_.has_value();
         if(pressOnLandmark_)
@@ -648,10 +658,13 @@ void SceneEditor::DoHUD()
     DrawOverlay();
 
     size_t changes = moved_.size() + landmarksChanged_.size();
-    gui->DoPanel(x, y, w, 400.f);
+    gui->DoPanel(x, y, w, 465.f);
     y += 5.f;
     gui->DoLabel(x + 5.f, y, "SCENE EDITOR");
     gui->DoLabel(x + w - 70.f, y, "E: exit");
+    y += 20.f;
+    id.item = 10;
+    landmarks.setPublishing(gui->DoCheckBox(id, x + 5.f, y, w - 10.f, landmarks.isPublishing(), "Publish landmarks"));
     y += 22.f;
 
     char buf[256];
@@ -669,6 +682,17 @@ void SceneEditor::DoHUD()
         LandmarkWorld(*selectedLandmark_, p);
         snprintf(buf, sizeof(buf), "N %.2f  E %.2f  depth %.2f", (double)p.getX(), (double)p.getY(), (double)p.getZ());
         gui->DoLabel(x + 5.f, y, buf);
+        y += 17.f;
+        id.item = 11;
+        bool enabled = gui->DoCheckBox(id, x + 5.f, y, w - 10.f, l.enabled, "Publish this landmark");
+        if(enabled != l.enabled)
+        {
+            PushUndo();
+            std::vector<SceneLandmark> ls = landmarks.Of(selectedLandmark_->entity);
+            ls[selectedLandmark_->index].enabled = enabled;
+            landmarks.Set(selectedLandmark_->entity, ls);
+            landmarksChanged_.insert(selectedLandmark_->entity);
+        }
     }
     else if(GroupCenter(c))
     {

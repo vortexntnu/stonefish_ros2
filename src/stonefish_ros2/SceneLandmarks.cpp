@@ -183,7 +183,7 @@ bool SceneLandmarks::WorldPosition(const SceneLandmark& landmark, Vector3& posit
 
 void SceneLandmarks::Publish()
 {
-    if(!pub_)
+    if(!pub_ || !publishing_)
         return;
 
     vortex_msgs::msg::LandmarkArray msg;
@@ -194,7 +194,7 @@ void SceneLandmarks::Publish()
     {
         Vector3 p;
         Transform T;
-        if(!WorldPosition(l, p) || !EntityTransform(l.entityName, T))
+        if(!l.enabled || !WorldPosition(l, p) || !EntityTransform(l.entityName, T))
             continue;
 
         vortex_msgs::msg::Landmark entry;

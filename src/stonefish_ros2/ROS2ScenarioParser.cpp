@@ -257,6 +257,7 @@ bool ROS2ScenarioParser::IncludeFiles(XMLNode* node)
         <landmark type="GATE" subtype="GATE_SEARCH_RESCUE" point="x y z" normal="x y z"/>
     point (optional) is in the object's frame, default is the centre of its bounding box.
     normal (optional, object frame) publishes its yaw, e.g. the front face of a board.
+    enabled="false" keeps the landmark in the scene without publishing it.
 */
 bool ROS2ScenarioParser::ParseLandmarks(XMLElement* element)
 {
@@ -290,6 +291,7 @@ bool ROS2ScenarioParser::ParseLandmark(XMLElement* item, const std::string& obje
         l.point = v;
     if(ParseLandmarkVector(item->Attribute("normal"), v))
         l.normal = v;
+    item->QueryBoolAttribute("enabled", &l.enabled);
 
     std::string error;
     if(!((ROS2SimulationManager*)getSimulationManager())->getLandmarks().Add(l, error))
