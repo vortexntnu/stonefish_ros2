@@ -80,7 +80,7 @@ namespace sf
 {
 
 ROS2SimulationManager::ROS2SimulationManager(Scalar stepsPerSecond, std::string scenarioFilePath, const std::shared_ptr<rclcpp::Node>& nh)
-	: SimulationManager(stepsPerSecond, SolverType::SOLVER_SI, CollisionFilteringType::COLLISION_EXCLUSIVE), scenarioPath_(scenarioFilePath), nh_(nh)
+	: SimulationManager(stepsPerSecond, Solver::SI, CollisionFilter::EXCLUSIVE), scenarioPath_(scenarioFilePath), nh_(nh)
 {
     it_ = std::make_shared<image_transport::ImageTransport>(nh_);
     interface_ = std::make_shared<ROS2Interface>(nh_);
@@ -662,7 +662,7 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
                     {
                         if(it->second.first == ServoControlMode::TORQUE)
                         {
-                            ((Motor*)actuator)->setIntensity(it->second.second);
+                            ((Motor*)actuator)->setCommand(it->second.second);
                         }
                     }
                 }
@@ -942,12 +942,12 @@ void ROS2SimulationManager::FLSScanReady(FLS* fls)
     //Fill in the data message
     sensor_msgs::msg::Image::SharedPtr img = sonarMsgPrototypes_[fls->getName()].first;
     img->header.stamp = nh_->get_clock()->now();
-    memcpy(img->data.data(), (uint8_t*)fls->getImageDataPointer(), img->step * img->height);
-    
+    memcpy(img->data.data(), fls->getImageDataPointer(), img->step * img->height);
+
     //Fill in the display message
     sensor_msgs::msg::Image::SharedPtr disp = sonarMsgPrototypes_[fls->getName()].second;
     disp->header.stamp = img->header.stamp;
-    memcpy(disp->data.data(), (uint8_t*)fls->getDisplayDataPointer(), disp->step * disp->height);
+    memcpy(disp->data.data(), fls->getDisplayDataPointer(), disp->step * disp->height);
 
     //Fill in the monochrome display message
     sensor_msgs::msg::Image::SharedPtr dispMono = std::make_shared<sensor_msgs::msg::Image>();
@@ -1010,12 +1010,12 @@ void ROS2SimulationManager::SSSScanReady(SSS* sss)
     //Fill in the data message
     sensor_msgs::msg::Image::SharedPtr img = sonarMsgPrototypes_[sss->getName()].first;
     img->header.stamp = nh_->get_clock()->now();
-    memcpy(img->data.data(), (uint8_t*)sss->getImageDataPointer(), img->step * img->height);
+    memcpy(img->data.data(), sss->getImageDataPointer(), img->step * img->height);
 
     //Fill in the display message
     sensor_msgs::msg::Image::SharedPtr disp = sonarMsgPrototypes_[sss->getName()].second;
     disp->header.stamp = img->header.stamp;
-    memcpy(disp->data.data(), (uint8_t*)sss->getDisplayDataPointer(), disp->step * disp->height);
+    memcpy(disp->data.data(), sss->getDisplayDataPointer(), disp->step * disp->height);
 
     //Publish messages
     imgPubs_.at(sss->getName()).publish(img);
@@ -1027,12 +1027,12 @@ void ROS2SimulationManager::MSISScanReady(MSIS* msis)
     //Fill in the data message
     sensor_msgs::msg::Image::SharedPtr img = sonarMsgPrototypes_[msis->getName()].first;
     img->header.stamp = nh_->get_clock()->now();
-    memcpy(img->data.data(), (uint8_t*)msis->getImageDataPointer(), img->step * img->height);
+    memcpy(img->data.data(), msis->getImageDataPointer(), img->step * img->height);
 
     //Fill in the display message
     sensor_msgs::msg::Image::SharedPtr disp = sonarMsgPrototypes_[msis->getName()].second;
     disp->header.stamp = img->header.stamp;
-    memcpy(disp->data.data(), (uint8_t*)msis->getDisplayDataPointer(), disp->step * disp->height);
+    memcpy(disp->data.data(), msis->getDisplayDataPointer(), disp->step * disp->height);
 
     //Fill in the laser scan message
     Scalar currentAngle = (msis->getCurrentRotationStep() * msis->getRotationStepAngle()) * M_PI / 180.0;
