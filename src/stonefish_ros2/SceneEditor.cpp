@@ -46,7 +46,7 @@ namespace
     const int kRingSegments = 48;
     const Scalar kSnapMove = 0.1;     // [m] with Ctrl
     const Scalar kSnapAngleDeg = 15.0;
-    const float kPanelHeight = 610.f;
+    const float kPanelHeight = 637.f;
 
     std::string ReadFile(const std::string& path)
     {
@@ -420,6 +420,16 @@ bool SceneEditor::GizmoCenter(Vector3& c) const
 {
     if(selectedLandmark_)
         return LandmarkWorld(*selectedLandmark_, c);
+    return ObjectPivot(c);
+}
+
+bool SceneEditor::ObjectPivot(Vector3& c) const
+{
+    if(pivot_ && !group_.empty())
+    {
+        c = group_[0]->getTransform().getOrigin(); // the parts of a group share their world_transform
+        return true;
+    }
     return GroupCenter(c);
 }
 
@@ -432,13 +442,21 @@ Scalar SceneEditor::GizmoSize(const Vector3& c) const
 
 Vector3 SceneEditor::HandleAxis(Handle h) const
 {
+    Vector3 a;
     switch(h)
     {
-        case Handle::AXIS_X: case Handle::RING_X: return Vector3(1, 0, 0);  // north
-        case Handle::AXIS_Y: case Handle::RING_Y: return Vector3(0, 1, 0);  // east
-        case Handle::AXIS_Z: case Handle::RING_Z: return Vector3(0, 0, -1); // up (Stonefish z is down)
+        case Handle::AXIS_X: case Handle::RING_X: a = Vector3(1, 0, 0); break;  // north / the object's front
+        case Handle::AXIS_Y: case Handle::RING_Y: a = Vector3(0, 1, 0); break;  // east / its right
+        case Handle::AXIS_Z: case Handle::RING_Z: a = Vector3(0, 0, -1); break; // up (Stonefish z is down)
         default: return Vector3(0, 0, 0);
     }
+    if(!localAxes_)
+        return a;
+    // Local: the object's own axes (a landmark uses its object's)
+    StaticEntity* e = group_.empty() ? nullptr : group_[0];
+    if(selectedLandmark_)
+        e = dynamic_cast<StaticEntity*>(sim_->getEntity(selectedLandmark_->entity));
+    return e != nullptr ? e->getTransform().getBasis() * a : a;
 }
 
 namespace
@@ -474,7 +492,7 @@ SceneEditor::Handle SceneEditor::HandleUnder(int x, int y) const
     {
         // Plane square first: it sits between the X and Y arrows
         float px, py;
-        if(ToScreen(c + Vector3(0.25, 0.25, 0) * L, px, py) && std::hypot(px - x, py - y) < bestDist)
+        if(ToScreen(c + (HandleAxis(Handle::AXIS_X) + HandleAxis(Handle::AXIS_Y)) * (L * 0.25), px, py) && std::hypot(px - x, py - y) < bestDist)
             return Handle::PLANE;
         for(Handle h : {Handle::AXIS_X, Handle::AXIS_Y, Handle::AXIS_Z})
         {
@@ -534,8 +552,9 @@ void SceneEditor::StartGizmoDrag(Handle h, int x, int y)
         dragStartTransforms_.push_back(e->getTransform());
     dragLandmarkStart_ = c;
 
+    dragAxis_ = HandleAxis(h == Handle::PLANE ? Handle::AXIS_Z : h);
     if(h == Handle::PLANE)
-        PlaneHit(x, y, c, Vector3(0, 0, 1), dragHitStart_);
+        PlaneHit(x, y, c, dragAxis_, dragHitStart_);
     else if(h == Handle::RING_X || h == Handle::RING_Y || h == Handle::RING_Z)
     {
         float cx, cy;
@@ -563,7 +582,7 @@ void SceneEditor::UpdateGizmoDrag(int x, int y, bool snap)
         case Handle::AXIS_Z:
         {
             // Mouse movement along the arrow on screen, in metres along the axis
-            Vector3 axis = HandleAxis(dragging_);
+            Vector3 axis = dragAxis_;
             float cx, cy, ex, ey;
             if(!ToScreen(dragCenter_, cx, cy) || !ToScreen(dragCenter_ + axis, ex, ey))
                 return;
@@ -580,12 +599,17 @@ void SceneEditor::UpdateGizmoDrag(int x, int y, bool snap)
         case Handle::PLANE:
         {
             Vector3 hit;
-            if(!PlaneHit(x, y, dragCenter_, Vector3(0, 0, 1), hit))
+            if(!PlaneHit(x, y, dragCenter_, dragAxis_, hit))
                 return;
-            delta = hit - dragHitStart_;
-            delta.setZ(0);
+            // In the handle's x-y plane: horizontal in Global, the object's own plane in Local
+            Vector3 ax = HandleAxis(Handle::AXIS_X), ay = HandleAxis(Handle::AXIS_Y);
+            Scalar dx = (hit - dragHitStart_).dot(ax), dy = (hit - dragHitStart_).dot(ay);
             if(snap)
-                delta = Vector3(std::round(delta.getX() / kSnapMove) * kSnapMove, std::round(delta.getY() / kSnapMove) * kSnapMove, 0);
+            {
+                dx = std::round(dx / kSnapMove) * kSnapMove;
+                dy = std::round(dy / kSnapMove) * kSnapMove;
+            }
+            delta = ax * dx + ay * dy;
             break;
         }
         case Handle::RING_X:
@@ -600,7 +624,7 @@ void SceneEditor::UpdateGizmoDrag(int x, int y, bool snap)
             Scalar angle = a * dragRotationSign_;
             if(snap)
                 angle = std::round(angle / (kSnapAngleDeg * M_PI / 180.0)) * (kSnapAngleDeg * M_PI / 180.0);
-            RotateAbout(HandleAxis(dragging_), angle, dragCenter_);
+            RotateAbout(dragAxis_, angle, dragCenter_);
             return;
         }
         default:
@@ -677,11 +701,13 @@ void SceneEditor::DrawGizmo()
             }
             content->DrawPrimitives(PrimitiveType::TRIANGLES, &tris, hc);
         }
-        // Horizontal plane square
+        // Plane square between the X and Y arrows
+        auto glv = [](const Vector3& v) { return glm::vec3((float)v.getX(), (float)v.getY(), (float)v.getZ()); };
+        glm::vec3 X = glv(HandleAxis(Handle::AXIS_X)), Y = glv(HandleAxis(Handle::AXIS_Y));
         float s = (float)L * 0.25f, e = (float)L * 0.12f;
-        glm::vec3 q = C + glm::vec3(s, s, 0.f);
-        std::vector<glm::vec3> square = {q + glm::vec3(-e, -e, 0), q + glm::vec3(e, -e, 0), q + glm::vec3(e, e, 0),
-                                         q + glm::vec3(-e, -e, 0), q + glm::vec3(e, e, 0), q + glm::vec3(-e, e, 0)};
+        glm::vec3 q = C + (X + Y) * s;
+        std::vector<glm::vec3> square = {q - X * e - Y * e, q + X * e - Y * e, q + X * e + Y * e,
+                                         q - X * e - Y * e, q + X * e + Y * e, q - X * e + Y * e};
         glm::vec4 pc = color(Handle::PLANE, glm::vec4(0.3f, 0.5f, 1.f, 0.6f));
         content->DrawPrimitives(PrimitiveType::TRIANGLES, &square, pc);
     }
@@ -785,6 +811,8 @@ bool SceneEditor::KeyDown(SDL_Event* event)
         case SDLK_q: tool_ = Tool::SELECT; return true;
         case SDLK_w: tool_ = Tool::MOVE; return true;
         case SDLK_e: tool_ = Tool::ROTATE; return true;
+        case SDLK_z: pivot_ = !pivot_; SetStatus(pivot_ ? "Pivot: the object's origin" : "Center: the middle of the object"); return true;
+        case SDLK_x: localAxes_ = !localAxes_; SetStatus(localAxes_ ? "Local: the object's own axes" : "Global: north, east, up"); return true;
         case SDLK_DELETE:
         case SDLK_BACKSPACE: RemoveSelectedLandmark(); return true;
         default: break;
@@ -814,7 +842,7 @@ bool SceneEditor::KeyDown(SDL_Event* event)
         PushUndo();
         MoveLandmark(*selectedLandmark_, p + delta);
     }
-    else if(GroupCenter(c))
+    else if(ObjectPivot(c))
     {
         PushUndo();
         if(yaw != 0)
@@ -1032,6 +1060,15 @@ void SceneEditor::DrawPanel()
         if(gui->DoButton(id, x + 5.f + i * (bw + 5.f), y, bw, 22.f, title))
             tool_ = (Tool)i;
     }
+    y += 27.f;
+    // Unity's Pivot/Center (Z) and Local/Global (X) toggles
+    GLfloat hw = (w - 15.f) / 2.f;
+    id.item = 23;
+    if(gui->DoButton(id, x + 5.f, y, hw, 22.f, pivot_ ? "Z Pivot" : "Z Center"))
+        pivot_ = !pivot_;
+    id.item = 24;
+    if(gui->DoButton(id, x + 10.f + hw, y, hw, 22.f, localAxes_ ? "X Local" : "X Global"))
+        localAxes_ = !localAxes_;
     y += 30.f;
 
     Vector3 c;

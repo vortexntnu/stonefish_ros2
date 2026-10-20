@@ -94,6 +94,8 @@ namespace sf
 
         // Gizmo
         bool GizmoCenter(Vector3& c) const;
+        //! The object's origin (Pivot) or the middle of its bounds (Center), like Unity's Z toggle.
+        bool ObjectPivot(Vector3& c) const;
         Scalar GizmoSize(const Vector3& c) const;
         Vector3 HandleAxis(Handle h) const;
         Handle HandleUnder(int x, int y) const;
@@ -117,6 +119,8 @@ namespace sf
         ROS2SimulationManager* sim_;
         bool active_ = false;
         Tool tool_ = Tool::MOVE;
+    bool pivot_ = true;      //!< Z: Pivot / Center, like Unity
+    bool localAxes_ = true;  //!< X: Local / Global, like Unity
 
         // Selection: all static objects that share a name prefix before "__" (one per material)
         std::string groupName_;
@@ -133,6 +137,7 @@ namespace sf
         int pressX_ = 0, pressY_ = 0;
         Vector3 dragCenter_;
         Vector3 dragHitStart_;
+        Vector3 dragAxis_;  //!< the handle's axis when the drag started (plane: its normal)
         float dragAngleStart_ = 0.f;
         Scalar dragRotationSign_ = 1;
         std::vector<Transform> dragStartTransforms_;
