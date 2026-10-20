@@ -108,6 +108,7 @@ namespace sf
         void DrawPanel();
         void DrawProfileMenu(float x, float y, float w);
         void DrawWaypoint();
+        void DrawLandmarkFrames();
         void SetStatus(const std::string& text);
 
         static std::string GroupOf(const std::string& entityName);
@@ -141,6 +142,7 @@ namespace sf
         std::set<std::string> moved_;
         std::set<std::string> landmarksChanged_;
         bool profileChanged_ = false;
+        bool debugView_ = true; //!< waypoint and landmark server frames in the 3D view
         unsigned int typeIndex_ = 0;
         unsigned int subtypeIndex_ = 0;
         std::string status_;

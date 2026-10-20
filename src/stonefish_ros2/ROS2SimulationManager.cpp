@@ -188,6 +188,46 @@ bool ROS2SimulationManager::getWaypoint(Transform& pose)
     return true;
 }
 
+void ROS2SimulationManager::SubscribeLandmarkFrames(const std::string& mapFrame, const std::string& worldFrame)
+{
+    // landmark_server sends map -> world (its map -> odom correction) and map -> each landmark frame on /tf
+    mapFrame_ = mapFrame;
+    worldFrame_ = worldFrame;
+    tfSub_ = nh_->create_subscription<tf2_msgs::msg::TFMessage>("/tf", rclcpp::QoS(100),
+        [this](const tf2_msgs::msg::TFMessage::SharedPtr msg) {
+            double now = nh_->get_clock()->now().seconds();
+            std::lock_guard<std::mutex> lock(waypointMutex_);
+            for(const auto& t : msg->transforms)
+            {
+                if(t.header.frame_id != mapFrame_)
+                    continue;
+                const auto& q = t.transform.rotation;
+                const auto& v = t.transform.translation;
+                mapFrames_[t.child_frame_id] = {Transform(Quaternion(q.x, q.y, q.z, q.w), Vector3(v.x, v.y, v.z)), now};
+            }
+        });
+}
+
+std::map<std::string, Transform> ROS2SimulationManager::getLandmarkFrames()
+{
+    std::map<std::string, Transform> out;
+    double now = nh_->get_clock()->now().seconds();
+    std::lock_guard<std::mutex> lock(waypointMutex_);
+    auto world = mapFrames_.find(worldFrame_);
+    if(world == mapFrames_.end())
+        return out;
+    Transform mapToWorld = world->second.first.inverse();
+    std::string prefix = mapFrame_.substr(0, mapFrame_.rfind('/') + 1); // "orca/"
+    for(const auto& [name, frame] : mapFrames_)
+    {
+        if(name == worldFrame_ || now - frame.second > 3.0) // gone after a wipe, or the server stopped
+            continue;
+        std::string shortName = name.rfind(prefix, 0) == 0 ? name.substr(prefix.size()) : name;
+        out[shortName] = mapToWorld * frame.first;
+    }
+    return out;
+}
+
 const std::string& ROS2SimulationManager::getScenarioPath() const
 {
     return scenarioPath_;

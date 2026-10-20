@@ -21,6 +21,7 @@ find_package(pcl_conversions REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(tf2_msgs REQUIRED)
 find_package(vortex_msgs REQUIRED)
 find_package(Stonefish REQUIRED 1.6.0)
 
@@ -77,6 +78,7 @@ ament_target_dependencies(stonefish_ros2_interface
  image_transport
  tf2
  tf2_ros
+ tf2_msgs
  vortex_msgs
 )
 ament_export_libraries(stonefish_ros2_interface)

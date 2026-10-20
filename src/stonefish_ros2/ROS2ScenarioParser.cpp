@@ -220,6 +220,16 @@ bool ROS2ScenarioParser::PreProcess(XMLNode* root, const std::map<std::string, s
         if(item->QueryStringAttribute("topic", &topic) == XML_SUCCESS)
             ((ROS2SimulationManager*)getSimulationManager())->SubscribeWaypoint(topic);
     }
+
+    //The landmark server's frames, drawn in the 3D view: <ros_landmark_frames map_frame="orca/map" world_frame="orca/odom"/>
+    if((item = root->FirstChildElement("ros_landmark_frames")) != nullptr)
+    {
+        const char* mapFrame = nullptr;
+        const char* worldFrame = nullptr;
+        if(item->QueryStringAttribute("map_frame", &mapFrame) == XML_SUCCESS
+           && item->QueryStringAttribute("world_frame", &worldFrame) == XML_SUCCESS)
+            ((ROS2SimulationManager*)getSimulationManager())->SubscribeLandmarkFrames(mapFrame, worldFrame);
+    }
     return true;
 }
 

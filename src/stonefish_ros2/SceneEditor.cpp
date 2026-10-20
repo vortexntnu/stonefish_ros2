@@ -46,7 +46,7 @@ namespace
     const int kRingSegments = 48;
     const Scalar kSnapMove = 0.1;     // [m] with Ctrl
     const Scalar kSnapAngleDeg = 15.0;
-    const float kPanelHeight = 590.f;
+    const float kPanelHeight = 610.f;
 
     std::string ReadFile(const std::string& path)
     {
@@ -914,9 +914,54 @@ void SceneEditor::DrawWaypoint()
     app_->getGUI()->DoLabel(sx - 20.f, sy + 10.f, buf, glm::vec4(1.f, 0.6f, 1.f, 1.f), 0.9f); // below, clear of the arrow
 }
 
+void SceneEditor::DrawLandmarkFrames()
+{
+    // The landmark server's frames (best landmark of each class, gate targets, start, priors) as
+    // red/green/blue x/y/z axes where the stack thinks they are. Main window only, like the waypoint.
+    std::map<std::string, Transform> frames = sim_->getLandmarkFrames();
+    if(frames.empty())
+        return;
+    auto gl = [](const Vector3& v) { return glm::vec3((float)v.getX(), (float)v.getY(), (float)v.getZ()); };
+    std::vector<glm::vec3> axes[3], priors;
+    for(const auto& [name, T] : frames)
+    {
+        bool prior = name.rfind("prior_", 0) == 0;
+        Scalar L = prior ? 0.15 : 0.35; // [m]
+        for(int i = 0; i < 3; ++i)
+        {
+            std::vector<glm::vec3>& v = prior ? priors : axes[i];
+            v.push_back(gl(T.getOrigin()));
+            v.push_back(gl(T.getOrigin() + T.getBasis().getColumn(i) * L));
+        }
+    }
+
+    OpenGLContent* content = app_->getGLPipeline()->getContent();
+    content->SetCurrentView(sim_->getTrackball());
+    GLint guiVertexArray;
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &guiVertexArray);
+    const glm::vec4 colors[3] = {glm::vec4(1.f, 0.2f, 0.2f, 1.f), glm::vec4(0.2f, 1.f, 0.2f, 1.f), glm::vec4(0.3f, 0.5f, 1.f, 1.f)};
+    for(int i = 0; i < 3; ++i)
+        if(!axes[i].empty())
+            content->DrawPrimitives(PrimitiveType::LINES, &axes[i], colors[i]);
+    if(!priors.empty())
+        content->DrawPrimitives(PrimitiveType::LINES, &priors, glm::vec4(0.6f, 0.6f, 0.6f, 1.f));
+    OpenGLState::BindVertexArray(guiVertexArray);
+
+    for(const auto& [name, T] : frames)
+    {
+        float sx, sy;
+        if(name.rfind("prior_", 0) != 0 && ToScreen(T.getOrigin(), sx, sy))
+            app_->getGUI()->DoLabel(sx + 6.f, sy + 4.f, name, glm::vec4(0.6f, 1.f, 0.6f, 1.f), 0.85f);
+    }
+}
+
 void SceneEditor::DoHUD()
 {
-    DrawWaypoint();
+    if(debugView_)
+    {
+        DrawLandmarkFrames();
+        DrawWaypoint();
+    }
     IMGUI* gui = app_->getGUI();
     SceneLandmarks& landmarks = sim_->getLandmarks();
     GLfloat w = 270.f;
@@ -926,11 +971,13 @@ void SceneEditor::DoHUD()
 
     if(!active_)
     {
-        gui->DoPanel(x, 10.f, w, 48.f);
+        gui->DoPanel(x, 10.f, w, 68.f);
         gui->DoLabel(x + 5.f, 18.f, "Press Tab to edit the scene");
         id.item = 10;
         landmarks.setPublishing(gui->DoCheckBox(id, x + 5.f, 35.f, w - 10.f, landmarks.isPublishing(), "Publish landmarks"));
-        DrawProfileMenu(x, 63.f, w);
+        id.item = 13;
+        debugView_ = gui->DoCheckBox(id, x + 5.f, 55.f, w - 10.f, debugView_, "Debug view (waypoint, frames)");
+        DrawProfileMenu(x, 83.f, w);
         return;
     }
 
@@ -1148,6 +1195,9 @@ void SceneEditor::DrawPanel()
 
     id.item = 10;
     landmarks.setPublishing(gui->DoCheckBox(id, x + 5.f, y, w - 10.f, landmarks.isPublishing(), "Publish landmarks"));
+    y += 20.f;
+    id.item = 13;
+    debugView_ = gui->DoCheckBox(id, x + 5.f, y, w - 10.f, debugView_, "Debug view (waypoint, frames)");
     y += 20.f;
     DrawProfileMenu(x, y, w);
     y += 45.f;
