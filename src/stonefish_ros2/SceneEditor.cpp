@@ -341,9 +341,8 @@ std::optional<SceneLandmark> SceneEditor::SelectedPose() const
     if(!selectedLandmark_)
         return std::nullopt;
     std::vector<SceneLandmark> ls = sim_->getLandmarks().Of(selectedLandmark_->entity);
-    Entity* ent = sim_->getEntity(selectedLandmark_->entity);
     if(selectedLandmark_->index >= ls.size() || ls[selectedLandmark_->index].kind == SceneLandmark::Kind::LANDMARK
-       || ent == nullptr || ent->getType() != EntityType::STATIC)
+       || sim_->getLandmarks().FindEntity(selectedLandmark_->entity) == nullptr)
         return std::nullopt;
     return ls[selectedLandmark_->index];
 }
@@ -612,9 +611,10 @@ void SceneEditor::StartGizmoDrag(Handle h, int x, int y)
     for(StaticEntity* e : group_)
         dragStartTransforms_.push_back(e->getTransform());
     dragLandmarkStart_ = c;
+    Transform poseObject;
     if(std::optional<SceneLandmark> pose = SelectedPose())
-        if(Entity* ent = sim_->getEntity(pose->entityName))
-            dragHeadingStart_ = ((StaticEntity*)ent)->getTransform().getBasis() * *pose->normal;
+        if(sim_->getLandmarks().EntityTransform(pose->entityName, poseObject))
+            dragHeadingStart_ = poseObject.getBasis() * *pose->normal;
 
     dragAxis_ = HandleAxis(h == Handle::PLANE ? Handle::AXIS_Z : h);
     if(h == Handle::PLANE)
@@ -691,11 +691,11 @@ void SceneEditor::UpdateGizmoDrag(int x, int y, bool snap)
             if(std::optional<SceneLandmark> pose = SelectedPose())
             {
                 // Turn the heading, stored in the object's frame like the point
-                Entity* ent = sim_->getEntity(pose->entityName);
-                if(ent == nullptr)
+                Transform T;
+                if(!sim_->getLandmarks().EntityTransform(pose->entityName, T))
                     return;
                 std::vector<SceneLandmark> ls = sim_->getLandmarks().Of(pose->entityName);
-                ls[selectedLandmark_->index].normal = ((StaticEntity*)ent)->getTransform().getBasis().transpose()
+                ls[selectedLandmark_->index].normal = T.getBasis().transpose()
                                                       * quatRotate(Quaternion(dragAxis_, angle), dragHeadingStart_);
                 sim_->getLandmarks().Set(pose->entityName, ls);
                 landmarksChanged_.insert(pose->entityName);
@@ -1015,11 +1015,10 @@ void SceneEditor::DrawPoses()
             }
             continue;
         }
-        Entity* ent = sim_->getEntity(l.entityName);
-        if(l.kind == SceneLandmark::Kind::LANDMARK || ent == nullptr || ent->getType() != EntityType::STATIC
-           || !sim_->getLandmarks().WorldPosition(l, p))
+        if(l.kind == SceneLandmark::Kind::LANDMARK || !sim_->getLandmarks().WorldPosition(l, p)
+           || !sim_->getLandmarks().EntityTransform(l.entityName, T))
             continue;
-        Vector3 f = ((StaticEntity*)ent)->getTransform().getBasis() * *l.normal;
+        Vector3 f = T.getBasis() * *l.normal;
         f.setZ(0);
         f = f.length() > 1e-6 ? f.normalized() : Vector3(1, 0, 0);
         Vector3 side(-f.getY(), f.getX(), 0);
@@ -1225,7 +1224,9 @@ void SceneEditor::DrawPanel()
         y += 15.f;
         Vector3 p;
         LandmarkWorld(*selectedLandmark_, p);
-        Vector3 f = ((StaticEntity*)sim_->getEntity(pose->entityName))->getTransform().getBasis() * *pose->normal;
+        Transform T;
+        sim_->getLandmarks().EntityTransform(pose->entityName, T);
+        Vector3 f = T.getBasis() * *pose->normal;
         snprintf(buf, sizeof(buf), "N %.2f E %.2f D %.2f  heading %.0f", (double)p.getX(), (double)p.getY(), (double)p.getZ(),
                  std::atan2(f.getY(), f.getX()) * 180.0 / M_PI);
         gui->DoLabel(x + 5.f, y, buf, glm::vec4(-1.f), 0.9f);

@@ -40,6 +40,11 @@ namespace sf
     public:
         ROS2ScenarioParser(ROS2SimulationManager* sm, const std::shared_ptr<rclcpp::Node>& nh);
 
+        //! After parsing: move the drone (the first robot) to the spawn point named by the 'spawn'
+        //! parameter, facing its heading as the odometry reports it, and record the start pose.
+        //! Returns false if there is no such spawn point (the drone then stays at its default pose).
+        bool PlaceDrone();
+
    protected:
         virtual bool PreProcess(XMLNode* root, const std::map<std::string, std::string>& args);
         virtual bool IncludeFiles(XMLNode* node);
@@ -61,16 +66,10 @@ namespace sf
         bool ParseLandmarks(XMLElement* element);
         bool ParseLandmark(XMLElement* item, const std::string& objectName);
         bool ParseSpawnOrPrior(XMLElement* item, SceneLandmark::Kind kind);
-        //! Puts the first robot at the spawn point named by the 'spawn' parameter (if set).
-        bool ApplySpawn(XMLElement* robot);
-        //! After the first robot is built: turn it so the heading its odometry reports is the spawn's,
-        //! whatever the drone file's mounting rotation, and record the start pose.
-        void AlignSpawnHeading();
+
 
         std::shared_ptr<rclcpp::Node> nh_;
-        std::optional<Scalar> spawnYaw_;  //!< world heading asked for by the spawn point
-        std::string spawnName_;
-        Transform robotOrigin_;           //!< world_transform of the first robot as built
+        Transform robotOrigin_ = Transform::getIdentity(); //!< world_transform of the first robot
     };
 }
 

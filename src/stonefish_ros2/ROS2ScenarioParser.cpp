@@ -313,49 +313,33 @@ bool ROS2ScenarioParser::ParseSpawnOrPrior(XMLElement* item, SceneLandmark::Kind
     return ((ROS2SimulationManager*)getSimulationManager())->getLandmarks().Add(l, error);
 }
 
-void ROS2ScenarioParser::AlignSpawnHeading()
+bool ROS2ScenarioParser::PlaceDrone()
 {
-    // The heading the stack sees is the odometry's, which depends on how the drone file mounts the
-    // model (Orca faces -90 deg in the TAC config and 0 in RoboSub), so measure it on the built robot
+    // After the whole scenario is built, so a spawn point can be on any object, also a robot defined
+    // after the drone (the TAC pipeline)
     ROS2SimulationManager* sim = (ROS2SimulationManager*)getSimulationManager();
     Robot* robot = sim->getRobot(0u);
-    Odometry* odom = nullptr;
-    for(size_t i = 0; odom == nullptr && robot->getSensor(i) != nullptr; ++i)
-        odom = dynamic_cast<Odometry*>(robot->getSensor(i));
-    auto heading = [](const Transform& T) {
-        Vector3 x = T.getBasis().getColumn(0);
-        return std::atan2(x.getY(), x.getX());
-    };
-    Scalar measured = odom != nullptr ? heading(odom->getSensorFrame()) : (spawnYaw_ ? *spawnYaw_ : Scalar(0));
-    if(spawnYaw_ && odom != nullptr)
-    {
-        Scalar delta = std::atan2(std::sin(*spawnYaw_ - measured), std::cos(*spawnYaw_ - measured));
-        if(std::abs(delta) > 1e-4)
-        {
-            // Turn about the world's vertical at the spawn position
-            Transform turned(Quaternion(delta, 0, 0) * robotOrigin_.getRotation(), robotOrigin_.getOrigin());
-            robot->Respawn(sim, turned);
-            log.Print(MessageType::INFO, "[ROS] Spawn '%s': turned the drone by %.1f deg to face %.1f deg",
-                      spawnName_.c_str(), delta * 180.0 / M_PI, *spawnYaw_ * 180.0 / M_PI);
-        }
-        measured = *spawnYaw_;
-    }
-    sim->setStartPose(robotOrigin_.getOrigin(), measured, spawnName_);
-}
-
-bool ROS2ScenarioParser::ApplySpawn(XMLElement* robot)
-{
-    ROS2SimulationManager* sim = (ROS2SimulationManager*)getSimulationManager();
+    if(robot == nullptr)
+        return true;
     if(!nh_->has_parameter("spawn"))
         nh_->declare_parameter("spawn", std::string(""));
     std::string spawn = nh_->get_parameter("spawn").as_string();
-    XMLElement* wt = robot->FirstChildElement("world_transform");
-    Vector3 xyz, rpy;
-    if(wt == nullptr || !ParseLandmarkVector(wt->Attribute("xyz"), xyz) || !ParseLandmarkVector(wt->Attribute("rpy"), rpy))
-        return true; // the base parser reports it
-    robotOrigin_ = Transform(Quaternion(rpy.z(), rpy.y(), rpy.x()), xyz);
+
+    // The heading the stack sees is the odometry's, which depends on how the drone file mounts the
+    // model (Orca faces -90 deg in the TAC config and 0 in RoboSub): measure it on the built robot
+    Odometry* odom = nullptr;
+    for(size_t i = 0; odom == nullptr && robot->getSensor(i) != nullptr; ++i)
+        odom = dynamic_cast<Odometry*>(robot->getSensor(i));
+    auto heading = [](const Matrix3& R) {
+        Vector3 x = R.getColumn(0);
+        return std::atan2(x.getY(), x.getX());
+    };
+    Scalar current = odom != nullptr ? heading(odom->getSensorFrame().getBasis()) : Scalar(0);
     if(spawn.empty())
+    {
+        sim->setStartPose(robotOrigin_.getOrigin(), current, "");
         return true;
+    }
 
     std::string names;
     for(const SceneLandmark& l : sim->getLandmarks().All())
@@ -364,29 +348,24 @@ bool ROS2ScenarioParser::ApplySpawn(XMLElement* robot)
             continue;
         names += " " + l.subtypeName;
         Vector3 p;
-        Entity* ent = sim->getEntity(l.entityName);
-        if(l.subtypeName != spawn || ent == nullptr || !sim->getLandmarks().WorldPosition(l, p))
+        Transform T;
+        if(l.subtypeName != spawn || !sim->getLandmarks().WorldPosition(l, p) || !sim->getLandmarks().EntityTransform(l.entityName, T))
             continue;
-        Transform T = ent->getType() == EntityType::STATIC ? ((StaticEntity*)ent)->getTransform() : ((SolidEntity*)ent)->getOTransform();
-        Vector3 heading = T.getBasis() * *l.normal;
-        Scalar yaw = std::atan2(heading.getY(), heading.getX());
-        // The drone file's rpy is how the model is mounted (facing +X); turn that about the world Z
-        Matrix3 R = Matrix3(Quaternion(yaw, 0, 0)) * Matrix3(Quaternion(rpy.z(), rpy.y(), rpy.x()));
-        Scalar y, pi, r;
-        R.getEulerYPR(y, pi, r);
-        char buf[128];
-        snprintf(buf, sizeof(buf), "%.4f %.4f %.4f", (double)p.getX(), (double)p.getY(), (double)p.getZ());
-        wt->SetAttribute("xyz", buf);
-        snprintf(buf, sizeof(buf), "%.5f %.5f %.5f", (double)r, (double)pi, (double)y);
-        wt->SetAttribute("rpy", buf);
-        robotOrigin_ = Transform(Quaternion(y, pi, r), p);
-        spawnYaw_ = yaw;
-        spawnName_ = spawn;
-        log.Print(MessageType::INFO, "[ROS] Spawning at '%s': %s", spawn.c_str(), wt->Attribute("xyz"));
+        Vector3 h = T.getBasis() * *l.normal;
+        Scalar yaw = std::atan2(h.getY(), h.getX());
+        // Turn the drone file's pose about the world's vertical so the odometry heading is the spawn's
+        Scalar delta = std::atan2(std::sin(yaw - current), std::cos(yaw - current));
+        robot->Respawn(sim, Transform(Quaternion(delta, 0, 0) * robotOrigin_.getRotation(), p));
+        sim->setStartPose(p, yaw, spawn);
+        log.Print(MessageType::INFO, "[ROS] Spawned at '%s': %.2f %.2f %.2f, heading %.1f deg", spawn.c_str(),
+                  (double)p.getX(), (double)p.getY(), (double)p.getZ(), yaw * 180.0 / M_PI);
+        RCLCPP_INFO(nh_->get_logger(), "Spawned at '%s' (%.2f, %.2f, %.2f), heading %.1f deg", spawn.c_str(),
+                    (double)p.getX(), (double)p.getY(), (double)p.getZ(), yaw * 180.0 / M_PI);
         return true;
     }
     log.Print(MessageType::ERROR, "No spawn point '%s' in the scenario, the spawn points are:%s", spawn.c_str(), names.c_str());
     RCLCPP_ERROR(nh_->get_logger(), "No spawn point '%s' in the scenario, the spawn points are:%s", spawn.c_str(), names.c_str());
+    sim->setStartPose(robotOrigin_.getOrigin(), current, "");
     return false;
 }
 
@@ -497,13 +476,16 @@ VelocityField* ROS2ScenarioParser::ParseVelocityField(XMLElement* element)
 bool ROS2ScenarioParser::ParseRobot(XMLElement* element)
 {
     // The first robot is the drone (the camera follows it too)
-    bool drone = getSimulationManager()->getRobot(0u) == nullptr;
-    if(drone && !ApplySpawn(element))
-        return false;
+    if(getSimulationManager()->getRobot(0u) == nullptr)
+    {
+        // Its pose as the drone file places it, for PlaceDrone()
+        XMLElement* wt = element->FirstChildElement("world_transform");
+        Vector3 xyz, rpy;
+        if(wt != nullptr && ParseLandmarkVector(wt->Attribute("xyz"), xyz) && ParseLandmarkVector(wt->Attribute("rpy"), rpy))
+            robotOrigin_ = Transform(Quaternion(rpy.z(), rpy.y(), rpy.x()), xyz);
+    }
     if(!ScenarioParser::ParseRobot(element))
         return false;
-    if(drone)
-        AlignSpawnHeading();
 
     ROS2SimulationManager* sim = (ROS2SimulationManager*)getSimulationManager();
     std::map<std::string, rclcpp::PublisherBase::SharedPtr>& pubs = sim->getPublishers();

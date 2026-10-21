@@ -203,10 +203,9 @@ bool ROS2SimulationManager::WritePremap(const std::string& path)
     for(const SceneLandmark& l : landmarks_->All())
     {
         Vector3 p;
-        Entity* ent = getEntity(l.entityName);
-        if(l.kind != SceneLandmark::Kind::PRIOR || ent == nullptr || !landmarks_->WorldPosition(l, p))
+        Transform T;
+        if(l.kind != SceneLandmark::Kind::PRIOR || !landmarks_->WorldPosition(l, p) || !landmarks_->EntityTransform(l.entityName, T))
             continue;
-        Transform T = ent->getType() == EntityType::STATIC ? ((StaticEntity*)ent)->getTransform() : ((SolidEntity*)ent)->getOTransform();
         Vector3 heading = T.getBasis() * *l.normal;
         Scalar yaw = std::atan2(heading.getY(), heading.getX()) - startYaw_;
         Vector3 q = start.inverse() * p;
@@ -287,6 +286,8 @@ void ROS2SimulationManager::BuildScenario()
     landmarks_->Clear();
     ROS2ScenarioParser parser(this, nh_);
     bool success = parser.Parse(scenarioPath_);
+    if(success)
+        parser.PlaceDrone();
 
     // Save log
     std::string logPath = rclcpp::get_logging_directory().string() + "/stonefish_ros2_parser.log";
