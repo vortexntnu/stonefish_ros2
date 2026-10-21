@@ -28,6 +28,7 @@
 
 #include "rclcpp/rclcpp.hpp"
 #include <Stonefish/core/ScenarioParser.h>
+#include "stonefish_ros2/SceneLandmarks.h"
 
 namespace sf
 {
@@ -58,6 +59,9 @@ namespace sf
         bool ReplaceROSVars(XMLNode* node);
         bool ParseLandmarks(XMLElement* element);
         bool ParseLandmark(XMLElement* item, const std::string& objectName);
+        bool ParseSpawnOrPrior(XMLElement* item, SceneLandmark::Kind kind);
+        //! Puts the first robot at the spawn point named by the 'spawn' parameter (if set).
+        bool ApplySpawn(XMLElement* robot);
 
         std::shared_ptr<rclcpp::Node> nh_;
     };

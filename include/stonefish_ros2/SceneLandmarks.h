@@ -43,6 +43,10 @@ namespace sf
         std::optional<Vector3> normal;  //!< In the object's frame. Set = publish its yaw (surface normal).
         bool enabled = true;            //!< enabled="false" in the scene: kept, but not published.
         bool downCamera = false;        //!< camera="down": seen by the down camera (bin floors, table items).
+        //! <spawn name=""> (where the drone can start) and <prior name=""> (a task of the landmark server's
+        //! premap) are kept with the landmarks so they follow their object, but are not published.
+        //! typeName is then "SPAWN" or "PRIOR", subtypeName the name, and normal the heading.
+        enum class Kind { LANDMARK, SPAWN, PRIOR } kind = Kind::LANDMARK;
     };
 
     //! Detection errors, the profiles robosub_dummy_publisher had. [near, far] pairs go from a close,

@@ -141,6 +141,10 @@ namespace sf
         //! The landmark server's frames in the world frame, without the map prefix; stale ones are left out.
         std::map<std::string, Transform> getLandmarkFrames();
         const std::string& getScenarioPath() const;
+        //! Where the drone starts (set by the parser): the origin of the landmark server's map frame.
+        void setStartPose(const Vector3& position, Scalar yaw, const std::string& spawn);
+        //! Writes the <prior> tasks in the start frame, as the landmark server's premap_file.
+        bool WritePremap(const std::string& path);
         std::shared_ptr<image_transport::ImageTransport> getImageTransportHandle();
         std::map<std::string, std::pair<sensor_msgs::msg::Image::SharedPtr, sensor_msgs::msg::CameraInfo::SharedPtr>>& getCameraMsgPrototypes();
         std::map<std::string, std::tuple<sensor_msgs::msg::Image::SharedPtr, sensor_msgs::msg::CameraInfo::SharedPtr, sensor_msgs::msg::Image::SharedPtr>>& getDualImageCameraMsgPrototypes();
@@ -199,6 +203,9 @@ namespace sf
         rclcpp::Subscription<vortex_msgs::msg::Waypoint>::SharedPtr waypointSub_;
         std::optional<Transform> waypoint_;
         std::mutex waypointMutex_;
+        Vector3 startPosition_;
+        Scalar startYaw_ = 0;
+        std::string startSpawn_;
         rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tfSub_;
         std::string mapFrame_, worldFrame_;
         std::map<std::string, std::pair<Transform, double>> mapFrames_; //!< child of map -> (pose in map, receive time)

@@ -46,7 +46,7 @@ namespace
     const int kRingSegments = 48;
     const Scalar kSnapMove = 0.1;     // [m] with Ctrl
     const Scalar kSnapAngleDeg = 15.0;
-    const float kPanelHeight = 637.f;
+    const float kPanelHeight = 669.f;
 
     std::string ReadFile(const std::string& path)
     {
@@ -124,6 +124,14 @@ namespace
 
     std::string LandmarkLine(const SceneLandmark& l)
     {
+        if(l.kind != SceneLandmark::Kind::LANDMARK)
+        {
+            char yaw[32];
+            snprintf(yaw, sizeof(yaw), "%.1f", std::atan2(l.normal->getY(), l.normal->getX()) * 180.0 / M_PI);
+            return std::string("  <") + (l.kind == SceneLandmark::Kind::SPAWN ? "spawn" : "prior") + " name=\"" + l.subtypeName
+                   + "\" object=\"" + l.entityName + "\" point=\"" + Format(l.point->getX(), l.point->getY(), l.point->getZ())
+                   + "\" yaw_deg=\"" + yaw + "\"/>\n";
+        }
         std::string line = "  <landmark object=\"" + l.entityName + "\" type=\"" + l.typeName + "\"";
         if(!l.subtypeName.empty())
             line += " subtype=\"" + l.subtypeName + "\"";
@@ -148,7 +156,8 @@ namespace
         size_t pos = 0;
         while(std::getline(in, line))
         {
-            bool isLandmark = line.find("<landmark") != std::string::npos;
+            bool isLandmark = line.find("<landmark") != std::string::npos || line.find("<spawn ") != std::string::npos
+                              || line.find("<prior ") != std::string::npos;
             bool standalone = isLandmark && line.find("object=\"" + name + "\"") != std::string::npos;
             bool inBlock = isLandmark && block.first != std::string::npos && pos > block.first && pos < block.second;
             if(!((standalone && !inlineOnly) || inBlock))
@@ -323,6 +332,52 @@ void SceneEditor::RemoveSelectedLandmark()
     selectedLandmark_.reset();
 }
 
+std::optional<SceneLandmark> SceneEditor::SelectedPose() const
+{
+    if(!selectedLandmark_)
+        return std::nullopt;
+    std::vector<SceneLandmark> ls = sim_->getLandmarks().Of(selectedLandmark_->entity);
+    Entity* ent = sim_->getEntity(selectedLandmark_->entity);
+    if(selectedLandmark_->index >= ls.size() || ls[selectedLandmark_->index].kind == SceneLandmark::Kind::LANDMARK
+       || ent == nullptr || ent->getType() != EntityType::STATIC)
+        return std::nullopt;
+    return ls[selectedLandmark_->index];
+}
+
+void SceneEditor::AddSpawn()
+{
+    Entity* picked = sim_->getEntity(pickedName_);
+    Vector3 c;
+    if(picked == nullptr || group_.empty() || !GroupCenter(c))
+        return;
+    // 2 m from the object towards the camera, 1 m deep, facing the object
+    glm::vec3 eye = sim_->getTrackball()->GetEyePosition();
+    Vector3 toCamera(eye.x - c.getX(), eye.y - c.getY(), 0);
+    toCamera = toCamera.length() > 1e-3 ? toCamera.normalized() : Vector3(-1, 0, 0);
+    Vector3 p = c + toCamera * 2.0;
+    p.setZ(1.0);
+
+    SceneLandmark l;
+    l.kind = SceneLandmark::Kind::SPAWN;
+    l.entityName = pickedName_;
+    l.typeName = "SPAWN";
+    l.subtypeName = groupName_;
+    for(int i = 2; std::any_of(sim_->getLandmarks().All().begin(), sim_->getLandmarks().All().end(),
+                               [&](const SceneLandmark& o) { return o.kind == l.kind && o.subtypeName == l.subtypeName; }); ++i)
+        l.subtypeName = groupName_ + "_" + std::to_string(i);
+    Transform T = ((StaticEntity*)picked)->getTransform();
+    l.point = T.inverse() * p;
+    l.normal = T.getBasis().transpose() * -toCamera;
+
+    PushUndo();
+    std::string error;
+    sim_->getLandmarks().Add(l, error);
+    landmarksChanged_.insert(pickedName_);
+    selectedLandmark_ = LandmarkRef{pickedName_, sim_->getLandmarks().Of(pickedName_).size() - 1};
+    tool_ = Tool::MOVE;
+    SetStatus("Added spawn '" + l.subtypeName + "' (spawn:=" + l.subtypeName + ") - move it, E to turn it");
+}
+
 // --- Editing -------------------------------------------------------------------
 
 void SceneEditor::PushUndo()
@@ -450,8 +505,8 @@ Vector3 SceneEditor::HandleAxis(Handle h) const
         case Handle::AXIS_Z: case Handle::RING_Z: a = Vector3(0, 0, -1); break; // up (Stonefish z is down)
         default: return Vector3(0, 0, 0);
     }
-    if(!localAxes_)
-        return a;
+    if(!localAxes_ || (selectedLandmark_ && h == Handle::RING_Z))
+        return a; // a spawn point or prior turns about the world's up
     // Local: the object's own axes (a landmark uses its object's)
     StaticEntity* e = group_.empty() ? nullptr : group_[0];
     if(selectedLandmark_)
@@ -507,10 +562,12 @@ SceneEditor::Handle SceneEditor::HandleUnder(int x, int y) const
             }
         }
     }
-    else if(!selectedLandmark_)
+    else if(!selectedLandmark_ || SelectedPose())
     {
         for(Handle h : {Handle::RING_X, Handle::RING_Y, Handle::RING_Z})
         {
+            if(selectedLandmark_ && h != Handle::RING_Z)
+                continue; // only the heading
             Vector3 u, v;
             RingBasis(HandleAxis(h), u, v);
             float lx = 0, ly = 0;
@@ -551,6 +608,9 @@ void SceneEditor::StartGizmoDrag(Handle h, int x, int y)
     for(StaticEntity* e : group_)
         dragStartTransforms_.push_back(e->getTransform());
     dragLandmarkStart_ = c;
+    if(std::optional<SceneLandmark> pose = SelectedPose())
+        if(Entity* ent = sim_->getEntity(pose->entityName))
+            dragHeadingStart_ = ((StaticEntity*)ent)->getTransform().getBasis() * *pose->normal;
 
     dragAxis_ = HandleAxis(h == Handle::PLANE ? Handle::AXIS_Z : h);
     if(h == Handle::PLANE)
@@ -624,7 +684,20 @@ void SceneEditor::UpdateGizmoDrag(int x, int y, bool snap)
             Scalar angle = a * dragRotationSign_;
             if(snap)
                 angle = std::round(angle / (kSnapAngleDeg * M_PI / 180.0)) * (kSnapAngleDeg * M_PI / 180.0);
-            RotateAbout(dragAxis_, angle, dragCenter_);
+            if(std::optional<SceneLandmark> pose = SelectedPose())
+            {
+                // Turn the heading, stored in the object's frame like the point
+                Entity* ent = sim_->getEntity(pose->entityName);
+                if(ent == nullptr)
+                    return;
+                std::vector<SceneLandmark> ls = sim_->getLandmarks().Of(pose->entityName);
+                ls[selectedLandmark_->index].normal = ((StaticEntity*)ent)->getTransform().getBasis().transpose()
+                                                      * quatRotate(Quaternion(dragAxis_, angle), dragHeadingStart_);
+                sim_->getLandmarks().Set(pose->entityName, ls);
+                landmarksChanged_.insert(pose->entityName);
+            }
+            else
+                RotateAbout(dragAxis_, angle, dragCenter_);
             return;
         }
         default:
@@ -648,7 +721,7 @@ void SceneEditor::DrawGizmo()
     Vector3 c;
     if(tool_ == Tool::SELECT || !GizmoCenter(c))
         return;
-    if(tool_ == Tool::ROTATE && selectedLandmark_)
+    if(tool_ == Tool::ROTATE && selectedLandmark_ && !SelectedPose())
         return; // a landmark is a point: nothing to rotate
 
     OpenGLContent* content = app_->getGLPipeline()->getContent();
@@ -715,6 +788,8 @@ void SceneEditor::DrawGizmo()
     {
         for(auto [h, col] : {std::pair{Handle::RING_X, red}, std::pair{Handle::RING_Y, green}, std::pair{Handle::RING_Z, blue}})
         {
+            if(selectedLandmark_ && h != Handle::RING_Z)
+                continue;
             Vector3 u, v;
             RingBasis(HandleAxis(h), u, v);
             std::vector<glm::vec3> ring;
@@ -897,6 +972,14 @@ void SceneEditor::DrawOverlay()
         SceneLandmark l = sim_->getLandmarks().Of(ref.entity)[ref.index]; // a copy: Of() returns a temporary
         // Grey: not published (this landmark, or all of them, switched off)
         bool published = l.enabled && sim_->getLandmarks().isPublishing();
+        if(l.kind != SceneLandmark::Kind::LANDMARK)
+        {
+            // Spawn points (green) and premap priors (orange): always labelled with their name
+            glm::vec4 c = selected ? yellow : (hovered ? white : (l.kind == SceneLandmark::Kind::SPAWN ? glm::vec4(0.3f, 1.f, 0.4f, 1.f) : orange));
+            gui->DoLabel(sx - 5.f, sy - 8.f, selected ? "[o]" : "o", c, selected ? 1.2f : 1.f);
+            gui->DoLabel(sx + 10.f, sy - 6.f, (l.kind == SceneLandmark::Kind::SPAWN ? "spawn " : "prior ") + l.subtypeName, c, 0.9f);
+            continue;
+        }
         glm::vec4 color = selected ? yellow : (hovered ? white : (published ? cyan : grey));
         gui->DoLabel(sx - 5.f, sy - 8.f, selected ? "[o]" : "o", color, selected ? 1.2f : 1.f);
         if(selected || hovered || onSelection)
@@ -905,6 +988,46 @@ void SceneEditor::DrawOverlay()
             gui->DoLabel(sx + 10.f, sy - 6.f, l.enabled ? label : label + " (off)", selected ? yellow : (published ? white : grey), 0.9f);
         }
     }
+}
+
+void SceneEditor::DrawPoses()
+{
+    // Heading arrows of the spawn points and priors, with a line up to the surface for the depth
+    auto gl = [](const Vector3& v) { return glm::vec3((float)v.getX(), (float)v.getY(), (float)v.getZ()); };
+    std::vector<glm::vec3> spawns, priors;
+    for(const SceneLandmark& l : sim_->getLandmarks().All())
+    {
+        Vector3 p;
+        Entity* ent = sim_->getEntity(l.entityName);
+        if(l.kind == SceneLandmark::Kind::LANDMARK || ent == nullptr || ent->getType() != EntityType::STATIC
+           || !sim_->getLandmarks().WorldPosition(l, p))
+            continue;
+        Vector3 f = ((StaticEntity*)ent)->getTransform().getBasis() * *l.normal;
+        f.setZ(0);
+        f = f.length() > 1e-6 ? f.normalized() : Vector3(1, 0, 0);
+        Vector3 side(-f.getY(), f.getX(), 0);
+        const Scalar L = 0.7; // [m], about the drone's length
+        std::vector<glm::vec3>& v = l.kind == SceneLandmark::Kind::SPAWN ? spawns : priors;
+        for(const auto& [a, b] : {std::pair{p - f * (L / 2), p + f * (L / 2)},
+                                  std::pair{p + f * (L / 2), p + f * (L * 0.2) + side * (L * 0.2)},
+                                  std::pair{p + f * (L / 2), p + f * (L * 0.2) - side * (L * 0.2)},
+                                  std::pair{Vector3(p.getX(), p.getY(), 0), p}})
+        {
+            v.push_back(gl(a));
+            v.push_back(gl(b));
+        }
+    }
+    if(spawns.empty() && priors.empty())
+        return;
+    OpenGLContent* content = app_->getGLPipeline()->getContent();
+    content->SetCurrentView(sim_->getTrackball());
+    GLint guiVertexArray;
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &guiVertexArray);
+    if(!spawns.empty())
+        content->DrawPrimitives(PrimitiveType::LINES, &spawns, glm::vec4(0.3f, 1.f, 0.4f, 1.f));
+    if(!priors.empty())
+        content->DrawPrimitives(PrimitiveType::LINES, &priors, glm::vec4(1.f, 0.6f, 0.1f, 1.f));
+    OpenGLState::BindVertexArray(guiVertexArray);
 }
 
 void SceneEditor::DrawWaypoint()
@@ -1027,6 +1150,7 @@ void SceneEditor::DoHUD()
     leftWasDown_ = leftDown;
 
     UpdateSelection();
+    DrawPoses();
     DrawGizmo();
     DrawOverlay();
     DrawPanel();
@@ -1072,7 +1196,25 @@ void SceneEditor::DrawPanel()
     y += 30.f;
 
     Vector3 c;
-    if(selectedLandmark_)
+    if(std::optional<SceneLandmark> pose = SelectedPose())
+    {
+        bool spawn = pose->kind == SceneLandmark::Kind::SPAWN;
+        snprintf(buf, sizeof(buf), spawn ? "Spawn point: %s" : "Premap prior: %s", pose->subtypeName.c_str());
+        gui->DoLabel(x + 5.f, y, buf);
+        y += 15.f;
+        Vector3 p;
+        LandmarkWorld(*selectedLandmark_, p);
+        Vector3 f = ((StaticEntity*)sim_->getEntity(pose->entityName))->getTransform().getBasis() * *pose->normal;
+        snprintf(buf, sizeof(buf), "N %.2f E %.2f D %.2f  heading %.0f", (double)p.getX(), (double)p.getY(), (double)p.getZ(),
+                 std::atan2(f.getY(), f.getX()) * 180.0 / M_PI);
+        gui->DoLabel(x + 5.f, y, buf, glm::vec4(-1.f), 0.9f);
+        y += 15.f;
+        snprintf(buf, sizeof(buf), spawn ? "on %s, start with spawn:=%s" : "on %s, the landmark server's '%s'",
+                 GroupOf(pose->entityName).c_str(), pose->subtypeName.c_str());
+        gui->DoLabel(x + 5.f, y, buf, glm::vec4(0.75f, 0.75f, 0.75f, 1.f), 0.85f);
+        y += 30.f;
+    }
+    else if(selectedLandmark_)
     {
         SceneLandmark l = landmarks.Of(selectedLandmark_->entity)[selectedLandmark_->index]; // a copy: Of() returns a temporary
         snprintf(buf, sizeof(buf), "Landmark type: %s", l.typeName.c_str());
@@ -1136,7 +1278,7 @@ void SceneEditor::DrawPanel()
     const char* help[] = {
         "Drag the arrows / rings (Ctrl: snap)",
         "Right mouse: look, + WASD: fly",
-        "Del: remove landmark   Ctrl+Z: undo",
+        "Del: remove landmark/spawn   Ctrl+Z: undo",
     };
     for(const char* line : help)
     {
@@ -1158,7 +1300,7 @@ void SceneEditor::DrawPanel()
         return names;
     };
     std::optional<SceneLandmark> editing;
-    if(selectedLandmark_)
+    if(selectedLandmark_ && !SelectedPose())
     {
         editing = landmarks.Of(selectedLandmark_->entity)[selectedLandmark_->index];
         typeIndex_ = (unsigned int)(std::find(types.begin(), types.end(), editing->typeName) - types.begin());
@@ -1214,6 +1356,16 @@ void SceneEditor::DrawPanel()
             RemoveSelectedLandmark();
         else if(!group_.empty())
             RemoveLandmarks();
+    }
+    y += 32.f;
+
+    id.item = 25;
+    if(gui->DoButton(id, x + 5.f, y, w - 10.f, 25.f, "Add spawn point to object"))
+    {
+        if(group_.empty())
+            SetStatus("Select an object first");
+        else
+            AddSpawn();
     }
     y += 32.f;
 
@@ -1304,7 +1456,7 @@ bool SceneEditor::Save(std::string& message)
     {
         std::string landmarkFile;
         for(const auto& [file, text] : texts)
-            if(text.find("<landmark object=") != std::string::npos)
+            if(text.find("<landmark object=") != std::string::npos || text.find("<spawn ") != std::string::npos)
                 landmarkFile = file;
         if(landmarkFile.empty())
         {

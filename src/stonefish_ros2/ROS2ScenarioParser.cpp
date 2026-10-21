@@ -61,6 +61,8 @@
 #include "stonefish_ros2/msg/event_array.hpp"
 
 #include <Stonefish/core/Robot.h>
+#include <Stonefish/entities/SolidEntity.h>
+#include <Stonefish/entities/StaticEntity.h>
 #include <Stonefish/entities/AnimatedEntity.h>
 #include <Stonefish/entities/animation/ManualTrajectory.h>
 #include <Stonefish/entities/forcefields/Uniform.h>
@@ -269,7 +271,92 @@ bool ROS2ScenarioParser::IncludeFiles(XMLNode* node)
         if(!ParseLandmark(item, object))
             return false;
     }
+    for(XMLElement* item = node->FirstChildElement("spawn"); item != nullptr; item = item->NextSiblingElement("spawn"))
+        if(!ParseSpawnOrPrior(item, SceneLandmark::Kind::SPAWN))
+            return false;
+    for(XMLElement* item = node->FirstChildElement("prior"); item != nullptr; item = item->NextSiblingElement("prior"))
+        if(!ParseSpawnOrPrior(item, SceneLandmark::Kind::PRIOR))
+            return false;
     return true;
+}
+
+/*
+    Where the drone can start, and the tasks of the landmark server's premap, attached to an object
+    like landmarks so they move with it (both editable in the scene editor):
+        <spawn name="slalom" object="slalom_triple__blackmat" point="x y z" yaw_deg="0"/>
+        <prior name="slalom" object="slalom_triple__blackmat" point="x y z" yaw_deg="0"/>
+    point and yaw_deg (the heading) are in the object's frame. spawn:=<name> starts the drone there.
+*/
+bool ROS2ScenarioParser::ParseSpawnOrPrior(XMLElement* item, SceneLandmark::Kind kind)
+{
+    const char* tag = kind == SceneLandmark::Kind::SPAWN ? "spawn" : "prior";
+    const char* name = nullptr;
+    const char* object = nullptr;
+    Vector3 point;
+    if(item->QueryStringAttribute("name", &name) != XML_SUCCESS || item->QueryStringAttribute("object", &object) != XML_SUCCESS
+       || !ParseLandmarkVector(item->Attribute("point"), point))
+    {
+        log.Print(MessageType::ERROR, "A <%s> needs 'name', 'object' and 'point' attributes!", tag);
+        return false;
+    }
+    double yawDeg = 0.0;
+    item->QueryDoubleAttribute("yaw_deg", &yawDeg);
+    SceneLandmark l;
+    l.kind = kind;
+    l.entityName = object;
+    l.typeName = kind == SceneLandmark::Kind::SPAWN ? "SPAWN" : "PRIOR";
+    l.subtypeName = name;
+    l.point = point;
+    l.normal = Vector3(std::cos(yawDeg * M_PI / 180.0), std::sin(yawDeg * M_PI / 180.0), 0);
+    std::string error;
+    return ((ROS2SimulationManager*)getSimulationManager())->getLandmarks().Add(l, error);
+}
+
+bool ROS2ScenarioParser::ApplySpawn(XMLElement* robot)
+{
+    ROS2SimulationManager* sim = (ROS2SimulationManager*)getSimulationManager();
+    if(!nh_->has_parameter("spawn"))
+        nh_->declare_parameter("spawn", std::string(""));
+    std::string spawn = nh_->get_parameter("spawn").as_string();
+    XMLElement* wt = robot->FirstChildElement("world_transform");
+    Vector3 xyz, rpy;
+    if(wt == nullptr || !ParseLandmarkVector(wt->Attribute("xyz"), xyz) || !ParseLandmarkVector(wt->Attribute("rpy"), rpy))
+        return true; // the base parser reports it
+    if(spawn.empty())
+    {
+        sim->setStartPose(xyz, 0, "");
+        return true;
+    }
+
+    std::string names;
+    for(const SceneLandmark& l : sim->getLandmarks().All())
+    {
+        if(l.kind != SceneLandmark::Kind::SPAWN)
+            continue;
+        names += " " + l.subtypeName;
+        Vector3 p;
+        Entity* ent = sim->getEntity(l.entityName);
+        if(l.subtypeName != spawn || ent == nullptr || !sim->getLandmarks().WorldPosition(l, p))
+            continue;
+        Transform T = ent->getType() == EntityType::STATIC ? ((StaticEntity*)ent)->getTransform() : ((SolidEntity*)ent)->getOTransform();
+        Vector3 heading = T.getBasis() * *l.normal;
+        Scalar yaw = std::atan2(heading.getY(), heading.getX());
+        // The drone file's rpy is how the model is mounted (facing +X); turn that about the world Z
+        Matrix3 R = Matrix3(Quaternion(yaw, 0, 0)) * Matrix3(Quaternion(rpy.z(), rpy.y(), rpy.x()));
+        Scalar y, pi, r;
+        R.getEulerYPR(y, pi, r);
+        char buf[128];
+        snprintf(buf, sizeof(buf), "%.4f %.4f %.4f", (double)p.getX(), (double)p.getY(), (double)p.getZ());
+        wt->SetAttribute("xyz", buf);
+        snprintf(buf, sizeof(buf), "%.5f %.5f %.5f", (double)r, (double)pi, (double)y);
+        wt->SetAttribute("rpy", buf);
+        sim->setStartPose(p, yaw, spawn);
+        log.Print(MessageType::INFO, "[ROS] Spawning at '%s': %s", spawn.c_str(), wt->Attribute("xyz"));
+        return true;
+    }
+    log.Print(MessageType::ERROR, "No spawn point '%s' in the scenario, the spawn points are:%s", spawn.c_str(), names.c_str());
+    RCLCPP_ERROR(nh_->get_logger(), "No spawn point '%s' in the scenario, the spawn points are:%s", spawn.c_str(), names.c_str());
+    return false;
 }
 
 /*
@@ -374,6 +461,9 @@ VelocityField* ROS2ScenarioParser::ParseVelocityField(XMLElement* element)
 
 bool ROS2ScenarioParser::ParseRobot(XMLElement* element)
 {
+    // The first robot is the drone (the camera follows it too)
+    if(getSimulationManager()->getRobot(0u) == nullptr && !ApplySpawn(element))
+        return false;
     if(!ScenarioParser::ParseRobot(element))
         return false;
 

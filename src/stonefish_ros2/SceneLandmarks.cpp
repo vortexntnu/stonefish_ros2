@@ -161,6 +161,11 @@ void SceneLandmarks::Configure(const std::string& topic, const std::string& fram
 bool SceneLandmarks::Add(const SceneLandmark& landmark, std::string& error)
 {
     SceneLandmark l = landmark;
+    if(l.kind != SceneLandmark::Kind::LANDMARK)
+    {
+        landmarks_.push_back(l);
+        return true;
+    }
     auto type = TypeNames().find(l.typeName);
     if(type == TypeNames().end())
     {
@@ -328,7 +333,7 @@ void SceneLandmarks::Publish()
     {
         Vector3 p;
         Transform T;
-        if(!l.enabled || !WorldPosition(l, p) || !EntityTransform(l.entityName, T))
+        if(l.kind != SceneLandmark::Kind::LANDMARK || !l.enabled || !WorldPosition(l, p) || !EntityTransform(l.entityName, T))
             continue;
 
         double b, range;

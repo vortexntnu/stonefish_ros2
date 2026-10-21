@@ -87,6 +87,10 @@ namespace sf
         bool LandmarkWorld(const LandmarkRef& ref, Vector3& p) const;
         std::vector<LandmarkRef> AllLandmarks() const;
         void AddLandmark();
+        void AddSpawn();
+        //! The selected marker if it is a spawn point or a prior (they have a heading to turn).
+        std::optional<SceneLandmark> SelectedPose() const;
+        void DrawPoses();
         void RemoveLandmarks();
         void RemoveSelectedLandmark();
         void PushUndo();
@@ -142,6 +146,7 @@ namespace sf
         Scalar dragRotationSign_ = 1;
         std::vector<Transform> dragStartTransforms_;
         Vector3 dragLandmarkStart_;
+        Vector3 dragHeadingStart_; //!< world heading of a spawn point or prior when its rotation started
 
         std::deque<Snapshot> undo_;
         std::set<std::string> moved_;

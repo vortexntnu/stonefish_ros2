@@ -73,6 +73,10 @@
 #include <Stonefish/actuators/VariableBuoyancy.h>
 #include <Stonefish/actuators/Light.h>
 #include <Stonefish/core/Robot.h>
+#include <Stonefish/entities/SolidEntity.h>
+#include <Stonefish/entities/StaticEntity.h>
+#include <fstream>
+#include <sstream>
 
 using namespace std::placeholders;
 
@@ -179,6 +183,50 @@ void ROS2SimulationManager::SubscribeWaypoint(const std::string& topic)
         });
 }
 
+void ROS2SimulationManager::setStartPose(const Vector3& position, Scalar yaw, const std::string& spawn)
+{
+    startPosition_ = position;
+    startYaw_ = yaw;
+    startSpawn_ = spawn;
+}
+
+bool ROS2SimulationManager::WritePremap(const std::string& path)
+{
+    // The map frame starts at the vehicle: origin above its start position, X the way it faces,
+    // Z down from the surface (depth stays absolute)
+    std::ostringstream out;
+    out << "# Written by the simulator from the <prior> tags of " << scenarioPath_ << ",\n"
+        << "# for the start " << (startSpawn_.empty() ? "drone_position" : "at spawn '" + startSpawn_ + "'") << ". Move the priors in the scene editor.\n"
+        << "reference_frame: start\nobjects:\n";
+    size_t n = 0;
+    Transform start(Quaternion(startYaw_, 0, 0), Vector3(startPosition_.getX(), startPosition_.getY(), 0));
+    for(const SceneLandmark& l : landmarks_->All())
+    {
+        Vector3 p;
+        Entity* ent = getEntity(l.entityName);
+        if(l.kind != SceneLandmark::Kind::PRIOR || ent == nullptr || !landmarks_->WorldPosition(l, p))
+            continue;
+        Transform T = ent->getType() == EntityType::STATIC ? ((StaticEntity*)ent)->getTransform() : ((SolidEntity*)ent)->getOTransform();
+        Vector3 heading = T.getBasis() * *l.normal;
+        Scalar yaw = std::atan2(heading.getY(), heading.getX()) - startYaw_;
+        Vector3 q = start.inverse() * p;
+        char buf[256];
+        snprintf(buf, sizeof(buf), "  %s:\n    position: [%.3f, %.3f, %.3f]\n    orientation: [0.0, 0.0, %.7f, %.7f]\n",
+                 l.subtypeName.c_str(), (double)q.getX(), (double)q.getY(), (double)p.getZ(), std::sin(yaw / 2), std::cos(yaw / 2));
+        out << buf;
+        ++n;
+    }
+    std::ofstream f(path);
+    f << out.str();
+    if(!f.good())
+    {
+        RCLCPP_ERROR(nh_->get_logger(), "Could not write the premap to '%s'", path.c_str());
+        return false;
+    }
+    RCLCPP_INFO(nh_->get_logger(), "Premap with %zu prior(s) written to '%s'", n, path.c_str());
+    return true;
+}
+
 bool ROS2SimulationManager::getWaypoint(Transform& pose)
 {
     std::lock_guard<std::mutex> lock(waypointMutex_);
@@ -253,6 +301,13 @@ void ROS2SimulationManager::BuildScenario()
 
     if(!success2)
         RCLCPP_ERROR(nh_->get_logger(), "Parser log file '%s' could not be saved!", logPath.c_str());
+
+    // The landmark server's premap from the <prior> tags, for where the drone starts
+    if(!nh_->has_parameter("premap_out"))
+        nh_->declare_parameter("premap_out", std::string(""));
+    std::string premapOut = nh_->get_parameter("premap_out").as_string();
+    if(success && !premapOut.empty())
+        WritePremap(premapOut);
 
     // Standard services
     srvs_["enable_currents"] = nh_->create_service<std_srvs::srv::Trigger>("enable_currents", std::bind(&ROS2SimulationManager::EnableCurrentsService, this, _1, _2));
