@@ -14,6 +14,7 @@
 
 #include "stonefish_ros2/SceneLandmarks.h"
 
+#include <Stonefish/core/Robot.h>
 #include <Stonefish/core/SimulationManager.h>
 #include <Stonefish/entities/SolidEntity.h>
 #include <Stonefish/entities/StaticEntity.h>
@@ -209,9 +210,24 @@ void SceneLandmarks::Set(const std::string& entityName, const std::vector<SceneL
     landmarks_.insert(landmarks_.end(), landmarks.begin(), landmarks.end());
 }
 
+Entity* SceneLandmarks::FindEntity(const std::string& name) const
+{
+    if(Entity* ent = sm_->getEntity(name))
+        return ent;
+    // Robot links are not entities of their own: "robot/link"
+    size_t slash = name.find('/');
+    Robot* robot = slash == std::string::npos ? nullptr : sm_->getRobot(name.substr(0, slash));
+    if(robot == nullptr)
+        return nullptr;
+    for(const std::string& link : {name, name.substr(slash + 1)})
+        if(SolidEntity* solid = robot->getLink(link))
+            return solid;
+    return nullptr;
+}
+
 bool SceneLandmarks::EntityTransform(const std::string& name, Transform& T) const
 {
-    Entity* ent = sm_->getEntity(name);
+    Entity* ent = FindEntity(name);
     if(ent == nullptr)
         return false;
     if(ent->getType() == EntityType::STATIC)
@@ -235,7 +251,7 @@ bool SceneLandmarks::WorldPosition(const SceneLandmark& landmark, Vector3& posit
     else
     {
         Vector3 min, max;
-        sm_->getEntity(landmark.entityName)->getAABB(min, max);
+        FindEntity(landmark.entityName)->getAABB(min, max);
         position = (min + max) / Scalar(2);
     }
     return true;
@@ -300,7 +316,7 @@ void SceneLandmarks::Publish()
     msg.header.frame_id = frameId_;
     double now = nh_->get_clock()->now().seconds();
 
-    auto entry = [&](const SceneLandmark& l, uint16_t subtype, const Vector3& p, std::optional<double> yaw, double yawStd) {
+    auto entry = [&](const SceneLandmark& l, uint16_t subtype, const Vector3& p, std::optional<Quaternion> q, double angleStd) {
         vortex_msgs::msg::Landmark e;
         e.header = msg.header;
         e.id = (int32_t)msg.landmarks.size();
@@ -312,12 +328,14 @@ void SceneLandmarks::Publish()
         double variance = prof.positionNoise > 0.0 ? prof.positionNoise * prof.positionNoise : 1e-4;
         for(size_t i : {0, 7, 14})
             e.pose.covariance[i] = variance;
-        if(yaw)
+        if(q)
         {
-            e.pose.pose.orientation.z = std::sin(*yaw / 2.0);
-            e.pose.pose.orientation.w = std::cos(*yaw / 2.0);
+            e.pose.pose.orientation.x = q->getX();
+            e.pose.pose.orientation.y = q->getY();
+            e.pose.pose.orientation.z = q->getZ();
+            e.pose.pose.orientation.w = q->getW();
             for(size_t i : {21, 28, 35})
-                e.pose.covariance[i] = std::pow(std::max(yawStd, M_PI / 180.0), 2);
+                e.pose.covariance[i] = std::pow(std::max(angleStd, M_PI / 180.0), 2);
         }
         else
         {
@@ -380,15 +398,26 @@ void SceneLandmarks::Publish()
             subtype = other->second;
         }
 
-        std::optional<double> yaw;
-        double yawStd = Lerp(prof.orientationNoiseDeg, b) * M_PI / 180.0;
-        if(l.normal)
+        std::optional<Quaternion> q;
+        double angleStd = Lerp(prof.orientationNoiseDeg, b) * M_PI / 180.0;
+        if(l.rotation)
+        {
+            // Full orientation, turned by a small random rotation for the noise
+            q = T.getRotation() * (*l.rotation);
+            if(angleStd > 0.0)
+            {
+                Vector3 axis(normal(rng_), normal(rng_), normal(rng_));
+                if(axis.length() > 1e-6)
+                    q = Quaternion(axis.normalized(), normal(rng_) * angleStd) * (*q);
+            }
+        }
+        else if(l.normal)
         {
             // Surface normal: yaw only, like robosub_dummy_publisher
             Vector3 n = T.getBasis() * (*l.normal);
-            yaw = std::atan2(n.getY(), n.getX()) + (yawStd > 0.0 ? normal(rng_) * yawStd : 0.0);
+            q = Quaternion(std::atan2(n.getY(), n.getX()) + (angleStd > 0.0 ? normal(rng_) * angleStd : 0.0), 0, 0);
         }
-        entry(l, subtype, noisy, yaw, yawStd);
+        entry(l, subtype, noisy, q, angleStd);
     }
 
     // False positives: clutter of the same class near landmarks in view

@@ -30,6 +30,7 @@
 namespace sf
 {
     class SimulationManager;
+    class Entity;
 
     //! A <landmark> tag inside a <static> or <dynamic> object.
     struct SceneLandmark
@@ -41,6 +42,9 @@ namespace sf
         uint16_t subtype;
         std::optional<Vector3> point;   //!< In the object's frame. Empty = centre of the object's bounding box.
         std::optional<Vector3> normal;  //!< In the object's frame. Set = publish its yaw (surface normal).
+        //! rpy="" in the object's frame: publish the full orientation of this frame, e.g. a valve with
+        //! Z out of its face and X along the handle (wins over normal).
+        std::optional<Quaternion> rotation;
         bool enabled = true;            //!< enabled="false" in the scene: kept, but not published.
         bool downCamera = false;        //!< camera="down": seen by the down camera (bin floors, table items).
         //! <spawn name=""> (where the drone can start) and <prior name=""> (a task of the landmark server's
@@ -114,13 +118,17 @@ namespace sf
         //! World position of a landmark, or false if its object does not exist.
         bool WorldPosition(const SceneLandmark& landmark, Vector3& position) const;
 
+        //! A static or dynamic object, or a robot link ("robot/link", e.g. "valve1/valve1_turnable").
+        Entity* FindEntity(const std::string& name) const;
+        //! Pose of FindEntity(name): its world transform (origin frame for dynamic bodies and links).
+        bool EntityTransform(const std::string& name, Transform& T) const;
+
         //! Known type and subtype names, from vortex_msgs (e.g. "GATE", "GATE_SEARCH_RESCUE").
         static const std::map<std::string, uint16_t>& TypeNames();
         static const std::map<std::string, std::map<std::string, uint16_t>>& SubtypeNames();
 
     private:
         void Publish();
-        bool EntityTransform(const std::string& name, Transform& T) const;
         //! Whether the landmark is in view, and how good the view is: 0 close and centred, 1 at the edge.
         bool InView(const SceneLandmark& l, const Vector3& p, double& badness, Vector3& viewDir, double& range) const;
         double Lerp(const double v[2], double b) const { return v[0] + (v[1] - v[0]) * b; }

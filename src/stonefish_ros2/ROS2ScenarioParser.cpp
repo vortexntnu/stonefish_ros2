@@ -61,6 +61,7 @@
 #include "stonefish_ros2/msg/event_array.hpp"
 
 #include <Stonefish/core/Robot.h>
+#include <Stonefish/sensors/scalar/Odometry.h>
 #include <Stonefish/entities/SolidEntity.h>
 #include <Stonefish/entities/StaticEntity.h>
 #include <Stonefish/entities/AnimatedEntity.h>
@@ -312,6 +313,36 @@ bool ROS2ScenarioParser::ParseSpawnOrPrior(XMLElement* item, SceneLandmark::Kind
     return ((ROS2SimulationManager*)getSimulationManager())->getLandmarks().Add(l, error);
 }
 
+void ROS2ScenarioParser::AlignSpawnHeading()
+{
+    // The heading the stack sees is the odometry's, which depends on how the drone file mounts the
+    // model (Orca faces -90 deg in the TAC config and 0 in RoboSub), so measure it on the built robot
+    ROS2SimulationManager* sim = (ROS2SimulationManager*)getSimulationManager();
+    Robot* robot = sim->getRobot(0u);
+    Odometry* odom = nullptr;
+    for(size_t i = 0; odom == nullptr && robot->getSensor(i) != nullptr; ++i)
+        odom = dynamic_cast<Odometry*>(robot->getSensor(i));
+    auto heading = [](const Transform& T) {
+        Vector3 x = T.getBasis().getColumn(0);
+        return std::atan2(x.getY(), x.getX());
+    };
+    Scalar measured = odom != nullptr ? heading(odom->getSensorFrame()) : (spawnYaw_ ? *spawnYaw_ : Scalar(0));
+    if(spawnYaw_ && odom != nullptr)
+    {
+        Scalar delta = std::atan2(std::sin(*spawnYaw_ - measured), std::cos(*spawnYaw_ - measured));
+        if(std::abs(delta) > 1e-4)
+        {
+            // Turn about the world's vertical at the spawn position
+            Transform turned(Quaternion(delta, 0, 0) * robotOrigin_.getRotation(), robotOrigin_.getOrigin());
+            robot->Respawn(sim, turned);
+            log.Print(MessageType::INFO, "[ROS] Spawn '%s': turned the drone by %.1f deg to face %.1f deg",
+                      spawnName_.c_str(), delta * 180.0 / M_PI, *spawnYaw_ * 180.0 / M_PI);
+        }
+        measured = *spawnYaw_;
+    }
+    sim->setStartPose(robotOrigin_.getOrigin(), measured, spawnName_);
+}
+
 bool ROS2ScenarioParser::ApplySpawn(XMLElement* robot)
 {
     ROS2SimulationManager* sim = (ROS2SimulationManager*)getSimulationManager();
@@ -322,11 +353,9 @@ bool ROS2ScenarioParser::ApplySpawn(XMLElement* robot)
     Vector3 xyz, rpy;
     if(wt == nullptr || !ParseLandmarkVector(wt->Attribute("xyz"), xyz) || !ParseLandmarkVector(wt->Attribute("rpy"), rpy))
         return true; // the base parser reports it
+    robotOrigin_ = Transform(Quaternion(rpy.z(), rpy.y(), rpy.x()), xyz);
     if(spawn.empty())
-    {
-        sim->setStartPose(xyz, 0, "");
         return true;
-    }
 
     std::string names;
     for(const SceneLandmark& l : sim->getLandmarks().All())
@@ -350,7 +379,9 @@ bool ROS2ScenarioParser::ApplySpawn(XMLElement* robot)
         wt->SetAttribute("xyz", buf);
         snprintf(buf, sizeof(buf), "%.5f %.5f %.5f", (double)r, (double)pi, (double)y);
         wt->SetAttribute("rpy", buf);
-        sim->setStartPose(p, yaw, spawn);
+        robotOrigin_ = Transform(Quaternion(y, pi, r), p);
+        spawnYaw_ = yaw;
+        spawnName_ = spawn;
         log.Print(MessageType::INFO, "[ROS] Spawning at '%s': %s", spawn.c_str(), wt->Attribute("xyz"));
         return true;
     }
@@ -365,6 +396,8 @@ bool ROS2ScenarioParser::ApplySpawn(XMLElement* robot)
         <landmark type="GATE" subtype="GATE_SEARCH_RESCUE" point="x y z" normal="x y z"/>
     point (optional) is in the object's frame, default is the centre of its bounding box.
     normal (optional, object frame) publishes its yaw, e.g. the front face of a board.
+    rpy (optional, object frame) publishes the full orientation of that frame, e.g. a valve
+    (Z out of its face, X along the handle). object can be a robot link: "robot/link".
     enabled="false" keeps the landmark in the scene without publishing it.
     camera="down" says the down camera sees it (bin floors, table items), for detection profiles.
 */
@@ -400,6 +433,8 @@ bool ROS2ScenarioParser::ParseLandmark(XMLElement* item, const std::string& obje
         l.point = v;
     if(ParseLandmarkVector(item->Attribute("normal"), v))
         l.normal = v;
+    if(ParseLandmarkVector(item->Attribute("rpy"), v))
+        l.rotation = Quaternion(v.getZ(), v.getY(), v.getX());
     item->QueryBoolAttribute("enabled", &l.enabled);
     const char* camera = item->Attribute("camera");
     l.downCamera = camera != nullptr && std::string(camera) == "down";
@@ -462,10 +497,13 @@ VelocityField* ROS2ScenarioParser::ParseVelocityField(XMLElement* element)
 bool ROS2ScenarioParser::ParseRobot(XMLElement* element)
 {
     // The first robot is the drone (the camera follows it too)
-    if(getSimulationManager()->getRobot(0u) == nullptr && !ApplySpawn(element))
+    bool drone = getSimulationManager()->getRobot(0u) == nullptr;
+    if(drone && !ApplySpawn(element))
         return false;
     if(!ScenarioParser::ParseRobot(element))
         return false;
+    if(drone)
+        AlignSpawnHeading();
 
     ROS2SimulationManager* sim = (ROS2SimulationManager*)getSimulationManager();
     std::map<std::string, rclcpp::PublisherBase::SharedPtr>& pubs = sim->getPublishers();

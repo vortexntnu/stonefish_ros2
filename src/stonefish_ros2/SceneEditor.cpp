@@ -139,6 +139,12 @@ namespace
             line += " point=\"" + Format(l.point->getX(), l.point->getY(), l.point->getZ()) + "\"";
         if(l.normal)
             line += " normal=\"" + Format(l.normal->getX(), l.normal->getY(), l.normal->getZ()) + "\"";
+        if(l.rotation)
+        {
+            Scalar yaw, pitch, roll;
+            Matrix3(*l.rotation).getEulerYPR(yaw, pitch, roll);
+            line += " rpy=\"" + Format(roll, pitch, yaw) + "\"";
+        }
         if(!l.enabled)
             line += " enabled=\"false\"";
         if(l.downCamera)
@@ -258,12 +264,10 @@ bool SceneEditor::LandmarkWorld(const LandmarkRef& ref, Vector3& p) const
 
 void SceneEditor::MoveLandmark(const LandmarkRef& ref, const Vector3& worldPosition)
 {
-    Entity* ent = sim_->getEntity(ref.entity);
     std::vector<SceneLandmark> ls = sim_->getLandmarks().Of(ref.entity);
-    if(ent == nullptr || ref.index >= ls.size())
+    Transform T;
+    if(ref.index >= ls.size() || !sim_->getLandmarks().EntityTransform(ref.entity, T))
         return;
-    Transform T = ent->getType() == EntityType::STATIC ? ((StaticEntity*)ent)->getTransform()
-                                                        : ((SolidEntity*)ent)->getOTransform();
     // Stored in the object's frame, so the point keeps following its object
     ls[ref.index].point = T.inverse() * worldPosition;
     sim_->getLandmarks().Set(ref.entity, ls);
@@ -994,10 +998,23 @@ void SceneEditor::DrawPoses()
 {
     // Heading arrows of the spawn points and priors, with a line up to the surface for the depth
     auto gl = [](const Vector3& v) { return glm::vec3((float)v.getX(), (float)v.getY(), (float)v.getZ()); };
-    std::vector<glm::vec3> spawns, priors;
+    std::vector<glm::vec3> spawns, priors, axes[3];
     for(const SceneLandmark& l : sim_->getLandmarks().All())
     {
         Vector3 p;
+        Transform T;
+        if(l.kind == SceneLandmark::Kind::LANDMARK && l.rotation && sim_->getLandmarks().WorldPosition(l, p)
+           && sim_->getLandmarks().EntityTransform(l.entityName, T))
+        {
+            // The published orientation: x red, y green, z blue
+            Matrix3 R = T.getBasis() * Matrix3(*l.rotation);
+            for(int i = 0; i < 3; ++i)
+            {
+                axes[i].push_back(gl(p));
+                axes[i].push_back(gl(p + R.getColumn(i) * 0.15));
+            }
+            continue;
+        }
         Entity* ent = sim_->getEntity(l.entityName);
         if(l.kind == SceneLandmark::Kind::LANDMARK || ent == nullptr || ent->getType() != EntityType::STATIC
            || !sim_->getLandmarks().WorldPosition(l, p))
@@ -1017,7 +1034,7 @@ void SceneEditor::DrawPoses()
             v.push_back(gl(b));
         }
     }
-    if(spawns.empty() && priors.empty())
+    if(spawns.empty() && priors.empty() && axes[0].empty())
         return;
     OpenGLContent* content = app_->getGLPipeline()->getContent();
     content->SetCurrentView(sim_->getTrackball());
@@ -1027,6 +1044,10 @@ void SceneEditor::DrawPoses()
         content->DrawPrimitives(PrimitiveType::LINES, &spawns, glm::vec4(0.3f, 1.f, 0.4f, 1.f));
     if(!priors.empty())
         content->DrawPrimitives(PrimitiveType::LINES, &priors, glm::vec4(1.f, 0.6f, 0.1f, 1.f));
+    const glm::vec4 axisColors[3] = {glm::vec4(1.f, 0.2f, 0.2f, 1.f), glm::vec4(0.2f, 1.f, 0.2f, 1.f), glm::vec4(0.3f, 0.5f, 1.f, 1.f)};
+    for(int i = 0; i < 3; ++i)
+        if(!axes[i].empty())
+            content->DrawPrimitives(PrimitiveType::LINES, &axes[i], axisColors[i]);
     OpenGLState::BindVertexArray(guiVertexArray);
 }
 

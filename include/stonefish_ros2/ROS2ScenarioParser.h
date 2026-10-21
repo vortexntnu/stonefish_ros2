@@ -29,6 +29,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include <Stonefish/core/ScenarioParser.h>
 #include "stonefish_ros2/SceneLandmarks.h"
+#include <optional>
 
 namespace sf
 {
@@ -62,8 +63,14 @@ namespace sf
         bool ParseSpawnOrPrior(XMLElement* item, SceneLandmark::Kind kind);
         //! Puts the first robot at the spawn point named by the 'spawn' parameter (if set).
         bool ApplySpawn(XMLElement* robot);
+        //! After the first robot is built: turn it so the heading its odometry reports is the spawn's,
+        //! whatever the drone file's mounting rotation, and record the start pose.
+        void AlignSpawnHeading();
 
         std::shared_ptr<rclcpp::Node> nh_;
+        std::optional<Scalar> spawnYaw_;  //!< world heading asked for by the spawn point
+        std::string spawnName_;
+        Transform robotOrigin_;           //!< world_transform of the first robot as built
     };
 }
 
