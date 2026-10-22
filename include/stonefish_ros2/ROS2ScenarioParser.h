@@ -28,6 +28,8 @@
 
 #include "rclcpp/rclcpp.hpp"
 #include <Stonefish/core/ScenarioParser.h>
+#include "stonefish_ros2/SceneLandmarks.h"
+#include <optional>
 
 namespace sf
 {
@@ -38,8 +40,16 @@ namespace sf
     public:
         ROS2ScenarioParser(ROS2SimulationManager* sm, const std::shared_ptr<rclcpp::Node>& nh);
 
+        //! After parsing: move the drone (the first robot) to the spawn point named by the 'spawn'
+        //! parameter, facing its heading as the odometry reports it, and record the start pose.
+        //! Returns false if there is no such spawn point (the drone then stays at its default pose).
+        bool PlaceDrone();
+
    protected:
         virtual bool PreProcess(XMLNode* root, const std::map<std::string, std::string>& args);
+        virtual bool IncludeFiles(XMLNode* node);
+        virtual bool ParseStatic(XMLElement* element);
+        virtual bool ParseDynamic(XMLElement* element);
         virtual VelocityField* ParseVelocityField(XMLElement* element);
         virtual bool ParseRobot(XMLElement* element);
         virtual bool ParseAnimated(XMLElement* element);
@@ -53,8 +63,13 @@ namespace sf
     private:
         std::string SubstituteROSVars(const std::string& value);
         bool ReplaceROSVars(XMLNode* node);
+        bool ParseLandmarks(XMLElement* element);
+        bool ParseLandmark(XMLElement* item, const std::string& objectName);
+        bool ParseSpawnOrPrior(XMLElement* item, SceneLandmark::Kind kind);
+
 
         std::shared_ptr<rclcpp::Node> nh_;
+        Transform robotOrigin_ = Transform::getIdentity(); //!< world_transform of the first robot
     };
 }
 

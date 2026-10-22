@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(stonefish_ros2)
+project(stonefish_ros2 VERSION 1.6.0)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -21,7 +21,10 @@ find_package(pcl_conversions REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
-find_package(Stonefish REQUIRED 1.5.0)
+find_package(tf2_msgs REQUIRED)
+find_package(vortex_msgs REQUIRED)
+find_package(vortex_utils_ros REQUIRED)
+find_package(Stonefish REQUIRED 1.6.0)
 
 # messages
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -54,6 +57,8 @@ add_library(stonefish_ros2_interface SHARED
   src/${PROJECT_NAME}/ROS2SimulationManager.cpp
   src/${PROJECT_NAME}/ROS2ScenarioParser.cpp
   src/${PROJECT_NAME}/ROS2Interface.cpp
+  src/${PROJECT_NAME}/SceneLandmarks.cpp
+  src/${PROJECT_NAME}/SceneEditor.cpp
 )
 target_link_libraries(stonefish_ros2_interface Stonefish::Stonefish "${cpp_typesupport_target}")
 target_include_directories(stonefish_ros2_interface
@@ -74,6 +79,9 @@ ament_target_dependencies(stonefish_ros2_interface
  image_transport
  tf2
  tf2_ros
+ tf2_msgs
+ vortex_msgs
+ vortex_utils_ros
 )
 ament_export_libraries(stonefish_ros2_interface)
 ament_export_include_directories(include)

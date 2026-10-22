@@ -73,6 +73,10 @@
 #include <Stonefish/actuators/VariableBuoyancy.h>
 #include <Stonefish/actuators/Light.h>
 #include <Stonefish/core/Robot.h>
+#include <Stonefish/entities/SolidEntity.h>
+#include <Stonefish/entities/StaticEntity.h>
+#include <fstream>
+#include <sstream>
 
 using namespace std::placeholders;
 
@@ -80,11 +84,12 @@ namespace sf
 {
 
 ROS2SimulationManager::ROS2SimulationManager(Scalar stepsPerSecond, std::string scenarioFilePath, const std::shared_ptr<rclcpp::Node>& nh)
-	: SimulationManager(stepsPerSecond, SolverType::SOLVER_SI, CollisionFilteringType::COLLISION_EXCLUSIVE), scenarioPath_(scenarioFilePath), nh_(nh)
+	: SimulationManager(stepsPerSecond, Solver::SI, CollisionFilter::EXCLUSIVE), scenarioPath_(scenarioFilePath), nh_(nh)
 {
     it_ = std::make_shared<image_transport::ImageTransport>(nh_);
     interface_ = std::make_shared<ROS2Interface>(nh_);
     tf_ = std::make_unique<tf2_ros::TransformBroadcaster>(nh_);
+    landmarks_ = std::make_unique<SceneLandmarks>(this, nh_);
 }
 
 ROS2SimulationManager::~ROS2SimulationManager()
@@ -162,11 +167,127 @@ bool ROS2SimulationManager::RespawnROS2Robot(const std::string& robotName, const
     return false;
 }
 
+SceneLandmarks& ROS2SimulationManager::getLandmarks()
+{
+    return *landmarks_;
+}
+
+void ROS2SimulationManager::SubscribeWaypoint(const std::string& topic)
+{
+    // The waypoint is published in the odom frame, which is the simulator's world frame
+    waypointSub_ = nh_->create_subscription<vortex_msgs::msg::Waypoint>(topic, rclcpp::QoS(10).best_effort(),
+        [this](const vortex_msgs::msg::Waypoint::SharedPtr msg) {
+            std::lock_guard<std::mutex> lock(waypointMutex_);
+            const auto& q = msg->pose.orientation;
+            waypoint_ = Transform(Quaternion(q.x, q.y, q.z, q.w), Vector3(msg->pose.position.x, msg->pose.position.y, msg->pose.position.z));
+        });
+}
+
+void ROS2SimulationManager::setStartPose(const Vector3& position, Scalar yaw, const std::string& spawn)
+{
+    startPosition_ = position;
+    startYaw_ = yaw;
+    startSpawn_ = spawn;
+}
+
+bool ROS2SimulationManager::WritePremap(const std::string& path)
+{
+    // The map frame starts at the vehicle: origin above its start position, X the way it faces,
+    // Z down from the surface (depth stays absolute)
+    std::ostringstream out;
+    out << "# Written by the simulator from the <prior> tags of " << scenarioPath_ << ",\n"
+        << "# for the start " << (startSpawn_.empty() ? "drone_position" : "at spawn '" + startSpawn_ + "'") << ". Move the priors in the scene editor.\n"
+        << "reference_frame: start\nobjects:\n";
+    size_t n = 0;
+    Transform start(Quaternion(startYaw_, 0, 0), Vector3(startPosition_.getX(), startPosition_.getY(), 0));
+    for(const SceneLandmark& l : landmarks_->All())
+    {
+        Vector3 p;
+        Transform T;
+        if(l.kind != SceneLandmark::Kind::PRIOR || !landmarks_->WorldPosition(l, p) || !landmarks_->EntityTransform(l.entityName, T))
+            continue;
+        Vector3 heading = T.getBasis() * *l.normal;
+        Scalar yaw = std::atan2(heading.getY(), heading.getX()) - startYaw_;
+        Vector3 q = start.inverse() * p;
+        char buf[256];
+        snprintf(buf, sizeof(buf), "  %s:\n    position: [%.3f, %.3f, %.3f]\n    orientation: [0.0, 0.0, %.7f, %.7f]\n",
+                 l.subtypeName.c_str(), (double)q.getX(), (double)q.getY(), (double)p.getZ(), std::sin(yaw / 2), std::cos(yaw / 2));
+        out << buf;
+        ++n;
+    }
+    std::ofstream f(path);
+    f << out.str();
+    if(!f.good())
+    {
+        RCLCPP_ERROR(nh_->get_logger(), "Could not write the premap to '%s'", path.c_str());
+        return false;
+    }
+    RCLCPP_INFO(nh_->get_logger(), "Premap with %zu prior(s) written to '%s'", n, path.c_str());
+    return true;
+}
+
+bool ROS2SimulationManager::getWaypoint(Transform& pose)
+{
+    std::lock_guard<std::mutex> lock(waypointMutex_);
+    if(!waypoint_)
+        return false;
+    pose = *waypoint_;
+    return true;
+}
+
+void ROS2SimulationManager::SubscribeLandmarkFrames(const std::string& mapFrame, const std::string& worldFrame)
+{
+    // landmark_server sends map -> world (its map -> odom correction) and map -> each landmark frame on /tf
+    mapFrame_ = mapFrame;
+    worldFrame_ = worldFrame;
+    tfSub_ = nh_->create_subscription<tf2_msgs::msg::TFMessage>("/tf", rclcpp::QoS(100),
+        [this](const tf2_msgs::msg::TFMessage::SharedPtr msg) {
+            double now = nh_->get_clock()->now().seconds();
+            std::lock_guard<std::mutex> lock(waypointMutex_);
+            for(const auto& t : msg->transforms)
+            {
+                if(t.header.frame_id != mapFrame_)
+                    continue;
+                const auto& q = t.transform.rotation;
+                const auto& v = t.transform.translation;
+                mapFrames_[t.child_frame_id] = {Transform(Quaternion(q.x, q.y, q.z, q.w), Vector3(v.x, v.y, v.z)), now};
+            }
+        });
+}
+
+std::map<std::string, Transform> ROS2SimulationManager::getLandmarkFrames()
+{
+    std::map<std::string, Transform> out;
+    double now = nh_->get_clock()->now().seconds();
+    std::lock_guard<std::mutex> lock(waypointMutex_);
+    auto world = mapFrames_.find(worldFrame_);
+    if(world == mapFrames_.end())
+        return out;
+    Transform mapToWorld = world->second.first.inverse();
+    std::string prefix = mapFrame_.substr(0, mapFrame_.rfind('/') + 1); // "orca/"
+    for(const auto& [name, frame] : mapFrames_)
+    {
+        if(name == worldFrame_ || now - frame.second > 3.0) // gone after a wipe, or the server stopped
+            continue;
+        std::string shortName = name.rfind(prefix, 0) == 0 ? name.substr(prefix.size()) : name;
+        out[shortName] = mapToWorld * frame.first;
+    }
+    return out;
+}
+
+const std::string& ROS2SimulationManager::getScenarioPath() const
+{
+    return scenarioPath_;
+}
+
 void ROS2SimulationManager::BuildScenario()
 {
-    // Run parser
+    // Run parser (it registers the <landmark> tags again)
+    landmarks_->Clear();
     ROS2ScenarioParser parser(this, nh_);
     bool success = parser.Parse(scenarioPath_);
+    if(success)
+        parser.PlaceDrone();
 
     // Save log
     std::string logPath = rclcpp::get_logging_directory().string() + "/stonefish_ros2_parser.log";
@@ -181,6 +302,13 @@ void ROS2SimulationManager::BuildScenario()
 
     if(!success2)
         RCLCPP_ERROR(nh_->get_logger(), "Parser log file '%s' could not be saved!", logPath.c_str());
+
+    // The landmark server's premap from the <prior> tags, for where the drone starts
+    if(!nh_->has_parameter("premap_out"))
+        nh_->declare_parameter("premap_out", std::string(""));
+    std::string premapOut = nh_->get_parameter("premap_out").as_string();
+    if(success && !premapOut.empty())
+        WritePremap(premapOut);
 
     // Standard services
     srvs_["enable_currents"] = nh_->create_service<std_srvs::srv::Trigger>("enable_currents", std::bind(&ROS2SimulationManager::EnableCurrentsService, this, _1, _2));
@@ -662,7 +790,7 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
                     {
                         if(it->second.first == ServoControlMode::TORQUE)
                         {
-                            ((Motor*)actuator)->setIntensity(it->second.second);
+                            ((Motor*)actuator)->setCommand(it->second.second);
                         }
                     }
                 }
@@ -942,12 +1070,12 @@ void ROS2SimulationManager::FLSScanReady(FLS* fls)
     //Fill in the data message
     sensor_msgs::msg::Image::SharedPtr img = sonarMsgPrototypes_[fls->getName()].first;
     img->header.stamp = nh_->get_clock()->now();
-    memcpy(img->data.data(), (uint8_t*)fls->getImageDataPointer(), img->step * img->height);
-    
+    memcpy(img->data.data(), fls->getImageDataPointer(), img->step * img->height);
+
     //Fill in the display message
     sensor_msgs::msg::Image::SharedPtr disp = sonarMsgPrototypes_[fls->getName()].second;
     disp->header.stamp = img->header.stamp;
-    memcpy(disp->data.data(), (uint8_t*)fls->getDisplayDataPointer(), disp->step * disp->height);
+    memcpy(disp->data.data(), fls->getDisplayDataPointer(), disp->step * disp->height);
 
     //Fill in the monochrome display message
     sensor_msgs::msg::Image::SharedPtr dispMono = std::make_shared<sensor_msgs::msg::Image>();
@@ -1010,12 +1138,12 @@ void ROS2SimulationManager::SSSScanReady(SSS* sss)
     //Fill in the data message
     sensor_msgs::msg::Image::SharedPtr img = sonarMsgPrototypes_[sss->getName()].first;
     img->header.stamp = nh_->get_clock()->now();
-    memcpy(img->data.data(), (uint8_t*)sss->getImageDataPointer(), img->step * img->height);
+    memcpy(img->data.data(), sss->getImageDataPointer(), img->step * img->height);
 
     //Fill in the display message
     sensor_msgs::msg::Image::SharedPtr disp = sonarMsgPrototypes_[sss->getName()].second;
     disp->header.stamp = img->header.stamp;
-    memcpy(disp->data.data(), (uint8_t*)sss->getDisplayDataPointer(), disp->step * disp->height);
+    memcpy(disp->data.data(), sss->getDisplayDataPointer(), disp->step * disp->height);
 
     //Publish messages
     imgPubs_.at(sss->getName()).publish(img);
@@ -1027,12 +1155,12 @@ void ROS2SimulationManager::MSISScanReady(MSIS* msis)
     //Fill in the data message
     sensor_msgs::msg::Image::SharedPtr img = sonarMsgPrototypes_[msis->getName()].first;
     img->header.stamp = nh_->get_clock()->now();
-    memcpy(img->data.data(), (uint8_t*)msis->getImageDataPointer(), img->step * img->height);
+    memcpy(img->data.data(), msis->getImageDataPointer(), img->step * img->height);
 
     //Fill in the display message
     sensor_msgs::msg::Image::SharedPtr disp = sonarMsgPrototypes_[msis->getName()].second;
     disp->header.stamp = img->header.stamp;
-    memcpy(disp->data.data(), (uint8_t*)msis->getDisplayDataPointer(), disp->step * disp->height);
+    memcpy(disp->data.data(), msis->getDisplayDataPointer(), disp->step * disp->height);
 
     //Fill in the laser scan message
     Scalar currentAngle = (msis->getCurrentRotationStep() * msis->getRotationStepAngle()) * M_PI / 180.0;

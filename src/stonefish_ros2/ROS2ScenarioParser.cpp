@@ -61,6 +61,9 @@
 #include "stonefish_ros2/msg/event_array.hpp"
 
 #include <Stonefish/core/Robot.h>
+#include <Stonefish/sensors/scalar/Odometry.h>
+#include <Stonefish/entities/SolidEntity.h>
+#include <Stonefish/entities/StaticEntity.h>
 #include <Stonefish/entities/AnimatedEntity.h>
 #include <Stonefish/entities/animation/ManualTrajectory.h>
 #include <Stonefish/entities/forcefields/Uniform.h>
@@ -190,7 +193,238 @@ bool ROS2ScenarioParser::PreProcess(XMLNode* root, const std::map<std::string, s
     if(!ReplaceROSVars(root))
         return false;
     //Then process include arguments
-    return ScenarioParser::PreProcess(root, args);
+    if(!ScenarioParser::PreProcess(root, args))
+        return false;
+
+    //Scene landmarks: <ros_landmarks topic="/orca/landmarks" frame_id="orca/odom" rate="10" profile="none"
+    //                  front_camera="orca/front_camera_optical" down_camera="orca/downwards_camera_optical"/>
+    XMLElement* item = root->FirstChildElement("ros_landmarks");
+    if(item != nullptr)
+    {
+        const char* topic = nullptr;
+        const char* frameId = nullptr;
+        double rate = 10.0;
+        if(item->QueryStringAttribute("topic", &topic) != XML_SUCCESS
+           || item->QueryStringAttribute("frame_id", &frameId) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "<ros_landmarks> needs 'topic' and 'frame_id' attributes!");
+            return false;
+        }
+        item->QueryDoubleAttribute("rate", &rate);
+        auto attr = [&](const char* name) { const char* v = item->Attribute(name); return std::string(v != nullptr ? v : ""); };
+        ((ROS2SimulationManager*)getSimulationManager())->getLandmarks().Configure(
+            topic, frameId, rate, attr("profile"), attr("front_camera"), attr("down_camera"));
+    }
+
+    //The waypoint the vehicle is going to, drawn in the 3D view: <ros_waypoint topic="/orca/debug/waypoint"/>
+    if((item = root->FirstChildElement("ros_waypoint")) != nullptr)
+    {
+        const char* topic = nullptr;
+        if(item->QueryStringAttribute("topic", &topic) == XML_SUCCESS)
+            ((ROS2SimulationManager*)getSimulationManager())->SubscribeWaypoint(topic);
+    }
+
+    //The landmark server's frames, drawn in the 3D view: <ros_landmark_frames map_frame="orca/map" world_frame="orca/odom"/>
+    if((item = root->FirstChildElement("ros_landmark_frames")) != nullptr)
+    {
+        const char* mapFrame = nullptr;
+        const char* worldFrame = nullptr;
+        if(item->QueryStringAttribute("map_frame", &mapFrame) == XML_SUCCESS
+           && item->QueryStringAttribute("world_frame", &worldFrame) == XML_SUCCESS)
+            ((ROS2SimulationManager*)getSimulationManager())->SubscribeLandmarkFrames(mapFrame, worldFrame);
+    }
+    return true;
+}
+
+bool ROS2ScenarioParser::ParseStatic(XMLElement* element)
+{
+    return ScenarioParser::ParseStatic(element) && ParseLandmarks(element);
+}
+
+bool ROS2ScenarioParser::ParseDynamic(XMLElement* element)
+{
+    return ScenarioParser::ParseDynamic(element) && ParseLandmarks(element);
+}
+
+static bool ParseLandmarkVector(const char* text, Vector3& v)
+{
+    double x, y, z;
+    if(text == nullptr || sscanf(text, "%lf %lf %lf", &x, &y, &z) != 3)
+        return false;
+    v = Vector3(x, y, z);
+    return true;
+}
+
+bool ROS2ScenarioParser::IncludeFiles(XMLNode* node)
+{
+    if(!ScenarioParser::IncludeFiles(node))
+        return false;
+
+    //Standalone landmarks, anywhere in the scenario or its includes: <landmark object="name" .../>
+    for(XMLElement* item = node->FirstChildElement("landmark"); item != nullptr; item = item->NextSiblingElement("landmark"))
+    {
+        const char* object = nullptr;
+        if(item->QueryStringAttribute("object", &object) != XML_SUCCESS)
+        {
+            log.Print(MessageType::ERROR, "A <landmark> outside an object needs an 'object' attribute!");
+            return false;
+        }
+        if(!ParseLandmark(item, object))
+            return false;
+    }
+    for(XMLElement* item = node->FirstChildElement("spawn"); item != nullptr; item = item->NextSiblingElement("spawn"))
+        if(!ParseSpawnOrPrior(item, SceneLandmark::Kind::SPAWN))
+            return false;
+    for(XMLElement* item = node->FirstChildElement("prior"); item != nullptr; item = item->NextSiblingElement("prior"))
+        if(!ParseSpawnOrPrior(item, SceneLandmark::Kind::PRIOR))
+            return false;
+    return true;
+}
+
+/*
+    Where the drone can start, and the tasks of the landmark server's premap, attached to an object
+    like landmarks so they move with it (both editable in the scene editor):
+        <spawn name="slalom" object="slalom_triple__blackmat" point="x y z" yaw_deg="0"/>
+        <prior name="slalom" object="slalom_triple__blackmat" point="x y z" yaw_deg="0"/>
+    point and yaw_deg (the heading) are in the object's frame. spawn:=<name> starts the drone there.
+*/
+bool ROS2ScenarioParser::ParseSpawnOrPrior(XMLElement* item, SceneLandmark::Kind kind)
+{
+    const char* tag = kind == SceneLandmark::Kind::SPAWN ? "spawn" : "prior";
+    const char* name = nullptr;
+    const char* object = nullptr;
+    Vector3 point;
+    if(item->QueryStringAttribute("name", &name) != XML_SUCCESS || item->QueryStringAttribute("object", &object) != XML_SUCCESS
+       || !ParseLandmarkVector(item->Attribute("point"), point))
+    {
+        log.Print(MessageType::ERROR, "A <%s> needs 'name', 'object' and 'point' attributes!", tag);
+        return false;
+    }
+    double yawDeg = 0.0;
+    item->QueryDoubleAttribute("yaw_deg", &yawDeg);
+    SceneLandmark l;
+    l.kind = kind;
+    l.entityName = object;
+    l.typeName = kind == SceneLandmark::Kind::SPAWN ? "SPAWN" : "PRIOR";
+    l.subtypeName = name;
+    l.point = point;
+    l.normal = Vector3(std::cos(yawDeg * M_PI / 180.0), std::sin(yawDeg * M_PI / 180.0), 0);
+    std::string error;
+    return ((ROS2SimulationManager*)getSimulationManager())->getLandmarks().Add(l, error);
+}
+
+bool ROS2ScenarioParser::PlaceDrone()
+{
+    // After the whole scenario is built, so a spawn point can be on any object, also a robot defined
+    // after the drone (the TAC pipeline)
+    ROS2SimulationManager* sim = (ROS2SimulationManager*)getSimulationManager();
+    Robot* robot = sim->getRobot(0u);
+    if(robot == nullptr)
+        return true;
+    if(!nh_->has_parameter("spawn"))
+        nh_->declare_parameter("spawn", std::string(""));
+    std::string spawn = nh_->get_parameter("spawn").as_string();
+
+    // The heading the stack sees is the odometry's, which depends on how the drone file mounts the
+    // model (Orca faces -90 deg in the TAC config and 0 in RoboSub): measure it on the built robot
+    Odometry* odom = nullptr;
+    for(size_t i = 0; odom == nullptr && robot->getSensor(i) != nullptr; ++i)
+        odom = dynamic_cast<Odometry*>(robot->getSensor(i));
+    auto heading = [](const Matrix3& R) {
+        Vector3 x = R.getColumn(0);
+        return std::atan2(x.getY(), x.getX());
+    };
+    Scalar current = odom != nullptr ? heading(odom->getSensorFrame().getBasis()) : Scalar(0);
+    if(spawn.empty())
+    {
+        sim->setStartPose(robotOrigin_.getOrigin(), current, "");
+        return true;
+    }
+
+    std::string names;
+    for(const SceneLandmark& l : sim->getLandmarks().All())
+    {
+        if(l.kind != SceneLandmark::Kind::SPAWN)
+            continue;
+        names += " " + l.subtypeName;
+        Vector3 p;
+        Transform T;
+        if(l.subtypeName != spawn || !sim->getLandmarks().WorldPosition(l, p) || !sim->getLandmarks().EntityTransform(l.entityName, T))
+            continue;
+        Vector3 h = T.getBasis() * *l.normal;
+        Scalar yaw = std::atan2(h.getY(), h.getX());
+        // Turn the drone file's pose about the world's vertical so the odometry heading is the spawn's
+        Scalar delta = std::atan2(std::sin(yaw - current), std::cos(yaw - current));
+        robot->Respawn(sim, Transform(Quaternion(delta, 0, 0) * robotOrigin_.getRotation(), p));
+        sim->setStartPose(p, yaw, spawn);
+        log.Print(MessageType::INFO, "[ROS] Spawned at '%s': %.2f %.2f %.2f, heading %.1f deg", spawn.c_str(),
+                  (double)p.getX(), (double)p.getY(), (double)p.getZ(), yaw * 180.0 / M_PI);
+        RCLCPP_INFO(nh_->get_logger(), "Spawned at '%s' (%.2f, %.2f, %.2f), heading %.1f deg", spawn.c_str(),
+                    (double)p.getX(), (double)p.getY(), (double)p.getZ(), yaw * 180.0 / M_PI);
+        return true;
+    }
+    log.Print(MessageType::ERROR, "No spawn point '%s' in the scenario, the spawn points are:%s", spawn.c_str(), names.c_str());
+    RCLCPP_ERROR(nh_->get_logger(), "No spawn point '%s' in the scenario, the spawn points are:%s", spawn.c_str(), names.c_str());
+    sim->setStartPose(robotOrigin_.getOrigin(), current, "");
+    return false;
+}
+
+/*
+    Landmarks published by SceneLandmarks, either inside a <static>/<dynamic> object or at the
+    top level with object="name":
+        <landmark type="GATE" subtype="GATE_SEARCH_RESCUE" point="x y z" normal="x y z"/>
+    point (optional) is in the object's frame, default is the centre of its bounding box.
+    normal (optional, object frame) publishes its yaw, e.g. the front face of a board.
+    rpy (optional, object frame) publishes the full orientation of that frame, e.g. a valve
+    (Z out of its face, X along the handle). object can be a robot link: "robot/link".
+    enabled="false" keeps the landmark in the scene without publishing it.
+    camera="down" says the down camera sees it (bin floors, table items), for detection profiles.
+*/
+bool ROS2ScenarioParser::ParseLandmarks(XMLElement* element)
+{
+    const char* name = nullptr;
+    if(element->QueryStringAttribute("name", &name) != XML_SUCCESS)
+        return true;
+
+    for(XMLElement* item = element->FirstChildElement("landmark"); item != nullptr; item = item->NextSiblingElement("landmark"))
+        if(!ParseLandmark(item, name))
+            return false;
+    return true;
+}
+
+bool ROS2ScenarioParser::ParseLandmark(XMLElement* item, const std::string& objectName)
+{
+    SceneLandmark l;
+    l.entityName = objectName;
+    const char* type = nullptr;
+    const char* subtype = nullptr;
+    if(item->QueryStringAttribute("type", &type) != XML_SUCCESS)
+    {
+        log.Print(MessageType::ERROR, "Landmark of '%s' has no type!", objectName.c_str());
+        return false;
+    }
+    l.typeName = type;
+    if(item->QueryStringAttribute("subtype", &subtype) == XML_SUCCESS)
+        l.subtypeName = subtype;
+
+    Vector3 v;
+    if(ParseLandmarkVector(item->Attribute("point"), v))
+        l.point = v;
+    if(ParseLandmarkVector(item->Attribute("normal"), v))
+        l.normal = v;
+    if(ParseLandmarkVector(item->Attribute("rpy"), v))
+        l.rotation = Quaternion(v.getZ(), v.getY(), v.getX());
+    item->QueryBoolAttribute("enabled", &l.enabled);
+    const char* camera = item->Attribute("camera");
+    l.downCamera = camera != nullptr && std::string(camera) == "down";
+
+    std::string error;
+    if(!((ROS2SimulationManager*)getSimulationManager())->getLandmarks().Add(l, error))
+    {
+        log.Print(MessageType::ERROR, "Landmark of '%s': %s!", objectName.c_str(), error.c_str());
+        return false;
+    }
+    return true;
 }
 
 VelocityField* ROS2ScenarioParser::ParseVelocityField(XMLElement* element)
@@ -241,6 +475,15 @@ VelocityField* ROS2ScenarioParser::ParseVelocityField(XMLElement* element)
 
 bool ROS2ScenarioParser::ParseRobot(XMLElement* element)
 {
+    // The first robot is the drone (the camera follows it too)
+    if(getSimulationManager()->getRobot(0u) == nullptr)
+    {
+        // Its pose as the drone file places it, for PlaceDrone()
+        XMLElement* wt = element->FirstChildElement("world_transform");
+        Vector3 xyz, rpy;
+        if(wt != nullptr && ParseLandmarkVector(wt->Attribute("xyz"), xyz) && ParseLandmarkVector(wt->Attribute("rpy"), rpy))
+            robotOrigin_ = Transform(Quaternion(rpy.z(), rpy.y(), rpy.x()), xyz);
+    }
     if(!ScenarioParser::ParseRobot(element))
         return false;
 

@@ -27,6 +27,8 @@
 #define __Stonefish_ROS2GraphicalSimulationApp__
 
 #include <Stonefish/core/GraphicalSimulationApp.h>
+#include "stonefish_ros2/SceneEditor.h"
+#include <memory>
 
 namespace sf
 {
@@ -42,6 +44,15 @@ namespace sf
         void Step();
         void Pause();
         void Resume();
+
+    protected:
+        void DoHUD() override;
+        void KeyDown(SDL_Event* event) override;
+        void MouseMove(SDL_Event* event) override;
+        void MouseUp(SDL_Event* event) override;
+
+    private:
+        std::unique_ptr<SceneEditor> editor_;
     };
 }
 
