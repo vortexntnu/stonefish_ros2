@@ -24,6 +24,7 @@
   <depend>tf2_ros</depend>
   <depend>tf2_msgs</depend>
   <depend>vortex_msgs</depend>
+  <depend>vortex_utils_ros</depend>
   
   <exec_depend>ros2launch</exec_depend>
   <exec_depend>rosidl_default_runtime</exec_depend>

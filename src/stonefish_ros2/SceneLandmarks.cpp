@@ -19,70 +19,36 @@
 #include <Stonefish/entities/SolidEntity.h>
 #include <Stonefish/entities/StaticEntity.h>
 #include <Stonefish/sensors/Sensor.h>
-#include "vortex_msgs/msg/landmark_subtype.hpp"
-#include "vortex_msgs/msg/landmark_type.hpp"
+#include <vortex/utils/ros/landmark_names.hpp>
 #include <algorithm>
 #include <cmath>
 
 namespace sf
 {
 
-using vortex_msgs::msg::LandmarkSubtype;
-using vortex_msgs::msg::LandmarkType;
-
+// The names come from vortex_utils_ros, the table the landmark server and the BT nodes use too
 const std::map<std::string, uint16_t>& SceneLandmarks::TypeNames()
 {
-    static const std::map<std::string, uint16_t> names = {
-        {"ARUCO_MARKER", LandmarkType::ARUCO_MARKER}, {"ARUCO_BOARD", LandmarkType::ARUCO_BOARD},
-        {"PIPELINE_START", LandmarkType::PIPELINE_START}, {"PIPELINE_END", LandmarkType::PIPELINE_END},
-        {"VALVE", LandmarkType::VALVE}, {"GATE", LandmarkType::GATE}, {"SLALOM_PIPE", LandmarkType::SLALOM_PIPE},
-        {"TORPEDO_BOARD", LandmarkType::TORPEDO_BOARD}, {"BIN", LandmarkType::BIN},
-        {"PATH_MARKER", LandmarkType::PATH_MARKER}, {"TABLE", LandmarkType::TABLE},
-        {"OCTAGON", LandmarkType::OCTAGON}, {"PINGER", LandmarkType::PINGER},
-    };
+    static const std::map<std::string, uint16_t> names = [] {
+        std::map<std::string, uint16_t> out;
+        for(const auto& t : vortex::utils::landmarks::kLandmarkTypes)
+            out[std::string(t.name)] = t.value;
+        return out;
+    }();
     return names;
 }
 
 const std::map<std::string, std::map<std::string, uint16_t>>& SceneLandmarks::SubtypeNames()
 {
-    // Subtype numbers repeat between types, so they are listed per type (as in LandmarkSubtype.msg)
-    static const std::map<std::string, std::map<std::string, uint16_t>> names = {
-        {"ARUCO_BOARD", {{"ARUCO_BOARD_CAMERA", LandmarkSubtype::ARUCO_BOARD_CAMERA},
-                         {"ARUCO_BOARD_SONAR", LandmarkSubtype::ARUCO_BOARD_SONAR},
-                         {"ARUCO_BOARD_DETECTION", LandmarkSubtype::ARUCO_BOARD_DETECTION}}},
-        {"VALVE", {{"VALVE_VERTICAL", LandmarkSubtype::VALVE_VERTICAL},
-                   {"VALVE_HORIZONTAL", LandmarkSubtype::VALVE_HORIZONTAL}}},
-        {"PIPELINE_START", {{"PIPELINE_START_CAMERA", LandmarkSubtype::PIPELINE_START_CAMERA},
-                            {"PIPELINE_START_SONAR", LandmarkSubtype::PIPELINE_START_SONAR}}},
-        {"GATE", {{"GATE_SEARCH_RESCUE", LandmarkSubtype::GATE_SEARCH_RESCUE},
-                  {"GATE_SURVEY_REPAIR", LandmarkSubtype::GATE_SURVEY_REPAIR}}},
-        {"SLALOM_PIPE", {{"SLALOM_PIPE_WHITE", LandmarkSubtype::SLALOM_PIPE_WHITE},
-                         {"SLALOM_PIPE_RED", LandmarkSubtype::SLALOM_PIPE_RED}}},
-        {"TORPEDO_BOARD", {{"TORPEDO_BOARD_WHOLE", LandmarkSubtype::TORPEDO_BOARD_WHOLE},
-                           {"TORPEDO_OPENING_LARGE_LEFT", LandmarkSubtype::TORPEDO_OPENING_LARGE_LEFT},
-                           {"TORPEDO_OPENING_LARGE_RIGHT", LandmarkSubtype::TORPEDO_OPENING_LARGE_RIGHT},
-                           {"TORPEDO_OPENING_SMALL_TOP", LandmarkSubtype::TORPEDO_OPENING_SMALL_TOP},
-                           {"TORPEDO_OPENING_SMALL_BOTTOM", LandmarkSubtype::TORPEDO_OPENING_SMALL_BOTTOM}}},
-        {"BIN", {{"BIN_SEARCH_RESCUE", LandmarkSubtype::BIN_SEARCH_RESCUE},
-                 {"BIN_SURVEY_REPAIR", LandmarkSubtype::BIN_SURVEY_REPAIR},
-                 {"BIN_UNCLASSIFIED", LandmarkSubtype::BIN_UNCLASSIFIED},
-                 {"BIN_STRUCTURE", LandmarkSubtype::BIN_STRUCTURE}}},
-        {"PATH_MARKER", {{"PATH_MARKER_WHOLE", LandmarkSubtype::PATH_MARKER_WHOLE}}},
-        {"TABLE", {{"TABLE_WHOLE", LandmarkSubtype::TABLE_WHOLE},
-                   {"TABLE_ITEM_NUTBOLT", LandmarkSubtype::TABLE_ITEM_NUTBOLT},
-                   {"TABLE_ITEM_ELECTRIC", LandmarkSubtype::TABLE_ITEM_ELECTRIC},
-                   {"TABLE_ITEM_PILL", LandmarkSubtype::TABLE_ITEM_PILL},
-                   {"TABLE_ITEM_BANDAID", LandmarkSubtype::TABLE_ITEM_BANDAID},
-                   {"TABLE_BASKET_SURVEY_REPAIR", LandmarkSubtype::TABLE_BASKET_SURVEY_REPAIR},
-                   {"TABLE_BASKET_SEARCH_RESCUE", LandmarkSubtype::TABLE_BASKET_SEARCH_RESCUE}}},
-        {"OCTAGON", {{"OCTAGON_WHOLE", LandmarkSubtype::OCTAGON_WHOLE},
-                     {"OCTAGON_IMAGE_REPAIR", LandmarkSubtype::OCTAGON_IMAGE_REPAIR},
-                     {"OCTAGON_IMAGE_RESCUE", LandmarkSubtype::OCTAGON_IMAGE_RESCUE},
-                     {"OCTAGON_IMAGE_SEARCH", LandmarkSubtype::OCTAGON_IMAGE_SEARCH},
-                     {"OCTAGON_IMAGE_SURVEY", LandmarkSubtype::OCTAGON_IMAGE_SURVEY}}},
-        {"PINGER", {{"PINGER_DEPLOY", LandmarkSubtype::PINGER_DEPLOY},
-                    {"PINGER_RESTORE", LandmarkSubtype::PINGER_RESTORE}}},
-    };
+    // Subtypes by the name of their type
+    static const std::map<std::string, std::map<std::string, uint16_t>> names = [] {
+        std::map<std::string, std::map<std::string, uint16_t>> out;
+        for(const auto& s : vortex::utils::landmarks::kLandmarkSubtypes)
+            for(const auto& t : vortex::utils::landmarks::kLandmarkTypes)
+                if(t.value == s.type)
+                    out[std::string(t.name)][std::string(s.name)] = s.value;
+        return out;
+    }();
     return names;
 }
 

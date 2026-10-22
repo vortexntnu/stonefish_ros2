@@ -23,6 +23,7 @@ find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_msgs REQUIRED)
 find_package(vortex_msgs REQUIRED)
+find_package(vortex_utils_ros REQUIRED)
 find_package(Stonefish REQUIRED 1.6.0)
 
 # messages
@@ -80,6 +81,7 @@ ament_target_dependencies(stonefish_ros2_interface
  tf2_ros
  tf2_msgs
  vortex_msgs
+ vortex_utils_ros
 )
 ament_export_libraries(stonefish_ros2_interface)
 ament_export_include_directories(include)
