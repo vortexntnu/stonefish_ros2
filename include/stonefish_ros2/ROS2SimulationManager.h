@@ -136,7 +136,8 @@ namespace sf
         //! The latest waypoint pose, in the world frame; false if none has been received.
         bool getWaypoint(Transform& pose);
         //! Shows the landmark server's frames (<ros_landmark_frames map_frame="" world_frame=""/>):
-        //! every TF child of map_frame, put into world_frame (odom, the simulator's world frame).
+        //! every frame on /tf that hangs off map_frame or world_frame, put into world_frame (odom, the
+        //! simulator's world frame).
         void SubscribeLandmarkFrames(const std::string& mapFrame, const std::string& worldFrame);
         //! The landmark server's frames in the world frame, without the map prefix; stale ones are left out.
         std::map<std::string, Transform> getLandmarkFrames();
@@ -208,7 +209,8 @@ namespace sf
         std::string startSpawn_;
         rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tfSub_;
         std::string mapFrame_, worldFrame_;
-        std::map<std::string, std::pair<Transform, double>> mapFrames_; //!< child of map -> (pose in map, receive time)
+        struct TfFrame { std::string parent; Transform pose; double stamp; };
+        std::map<std::string, TfFrame> tfFrames_; //!< child -> (parent, pose in parent, receive time)
         std::map<std::string, rclcpp::ServiceBase::SharedPtr> srvs_;
         std::map<std::string, rclcpp::PublisherBase::SharedPtr> pubs_;
         std::map<std::string, rclcpp::SubscriptionBase::SharedPtr> subs_;

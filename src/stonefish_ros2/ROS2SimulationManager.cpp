@@ -237,20 +237,22 @@ bool ROS2SimulationManager::getWaypoint(Transform& pose)
 
 void ROS2SimulationManager::SubscribeLandmarkFrames(const std::string& mapFrame, const std::string& worldFrame)
 {
-    // landmark_server sends map -> world (its map -> odom correction) and map -> each landmark frame on /tf
+    // landmark_server sends map -> world (its map -> odom correction) on /tf, and its frames under map,
+    // world or another of its frames (targets)
     mapFrame_ = mapFrame;
     worldFrame_ = worldFrame;
+    std::string vehicle = mapFrame_.substr(0, mapFrame_.rfind('/') + 1) + "base_link";
     tfSub_ = nh_->create_subscription<tf2_msgs::msg::TFMessage>("/tf", rclcpp::QoS(100),
-        [this](const tf2_msgs::msg::TFMessage::SharedPtr msg) {
+        [this, vehicle](const tf2_msgs::msg::TFMessage::SharedPtr msg) {
             double now = nh_->get_clock()->now().seconds();
             std::lock_guard<std::mutex> lock(waypointMutex_);
             for(const auto& t : msg->transforms)
             {
-                if(t.header.frame_id != mapFrame_)
+                if(t.child_frame_id == vehicle) // the drone itself, and with it all its links
                     continue;
                 const auto& q = t.transform.rotation;
                 const auto& v = t.transform.translation;
-                mapFrames_[t.child_frame_id] = {Transform(Quaternion(q.x, q.y, q.z, q.w), Vector3(v.x, v.y, v.z)), now};
+                tfFrames_[t.child_frame_id] = {t.header.frame_id, Transform(Quaternion(q.x, q.y, q.z, q.w), Vector3(v.x, v.y, v.z)), now};
             }
         });
 }
@@ -260,17 +262,41 @@ std::map<std::string, Transform> ROS2SimulationManager::getLandmarkFrames()
     std::map<std::string, Transform> out;
     double now = nh_->get_clock()->now().seconds();
     std::lock_guard<std::mutex> lock(waypointMutex_);
-    auto world = mapFrames_.find(worldFrame_);
-    if(world == mapFrames_.end())
+    auto world = tfFrames_.find(worldFrame_);
+    if(world == tfFrames_.end() || world->second.parent != mapFrame_)
         return out;
-    Transform mapToWorld = world->second.first.inverse();
+    Transform mapToWorld = world->second.pose.inverse();
     std::string prefix = mapFrame_.substr(0, mapFrame_.rfind('/') + 1); // "orca/"
-    for(const auto& [name, frame] : mapFrames_)
+    for(const auto& [name, frame] : tfFrames_)
     {
-        if(name == worldFrame_ || now - frame.second > 3.0) // gone after a wipe, or the server stopped
+        if(name == worldFrame_ || now - frame.stamp > 3.0) // gone after a wipe, or the server stopped
+            continue;
+        // Up the parents to world or map; a few levels is enough for targets on targets
+        Transform pose = frame.pose;
+        std::string parent = frame.parent;
+        bool found = false;
+        for(int i = 0; i < 8 && !found; ++i)
+        {
+            if(parent == worldFrame_)
+                found = true;
+            else if(parent == mapFrame_)
+            {
+                pose = mapToWorld * pose;
+                found = true;
+            }
+            else
+            {
+                auto up = tfFrames_.find(parent);
+                if(up == tfFrames_.end())
+                    break;
+                pose = up->second.pose * pose;
+                parent = up->second.parent;
+            }
+        }
+        if(!found)
             continue;
         std::string shortName = name.rfind(prefix, 0) == 0 ? name.substr(prefix.size()) : name;
-        out[shortName] = mapToWorld * frame.first;
+        out[shortName] = pose;
     }
     return out;
 }

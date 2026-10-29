@@ -22,6 +22,7 @@
 #include <Stonefish/graphics/IMGUI.h>
 #include <Stonefish/graphics/OpenGLContent.h>
 #include <Stonefish/graphics/OpenGLPipeline.h>
+#include <Stonefish/graphics/OpenGLPrinter.h>
 #include <Stonefish/graphics/OpenGLState.h>
 #include <Stonefish/graphics/OpenGLTrackball.h>
 #include <Stonefish/utils/SystemUtil.hpp>
@@ -1088,19 +1089,42 @@ void SceneEditor::DrawWaypoint()
 void SceneEditor::DrawLandmarkFrames()
 {
     // The landmark server's frames (best landmark of each class, gate targets, start, priors) as
-    // red/green/blue x/y/z axes where the stack thinks they are. Main window only, like the waypoint.
+    // red/green/blue x/y/z axes where the stack thinks they are. Targets (<parent>/<name> offsets,
+    // not /measured) are all yellow. Names in black on white. Main window only, like the waypoint.
+    static OpenGLPrinter labelPrinter(GetShaderPath() + std::string(STANDARD_FONT_NAME), STANDARD_FONT_SIZE); // label widths
+    // A plain white rectangle behind a label (screen coordinates from the top left)
+    auto WhiteBox = [this](float x, float y, float w, float h) {
+        GLfloat clear[4];
+        glGetFloatv(GL_COLOR_CLEAR_VALUE, clear);
+        GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+        glEnable(GL_SCISSOR_TEST);
+        glScissor((GLint)x, app_->getWindowHeight() - (GLint)(y + h), (GLsizei)std::ceil(w), (GLsizei)std::ceil(h));
+        glClearColor(1.f, 1.f, 1.f, 1.f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glClearColor(clear[0], clear[1], clear[2], clear[3]);
+        if(!scissor)
+            glDisable(GL_SCISSOR_TEST);
+    };
     std::map<std::string, Transform> frames = sim_->getLandmarkFrames();
+    for(auto it = frames.begin(); it != frames.end();) // /live is single raw detections: it only jumps around
+        it = it->first.size() > 5 && it->first.compare(it->first.size() - 5, 5, "/live") == 0 ? frames.erase(it) : std::next(it);
     if(frames.empty())
         return;
     auto gl = [](const Vector3& v) { return glm::vec3((float)v.getX(), (float)v.getY(), (float)v.getZ()); };
-    std::vector<glm::vec3> axes[3], priors;
+    auto targetName = [](const std::string& name) {
+        size_t slash = name.rfind('/');
+        std::string last = slash == std::string::npos ? "" : name.substr(slash + 1);
+        return last == "measured" ? std::string() : last;
+    };
+    std::vector<glm::vec3> axes[3], priors, targets;
     for(const auto& [name, T] : frames)
     {
         bool prior = name.rfind("prior_", 0) == 0;
-        Scalar L = prior ? 0.15 : 0.35; // [m]
+        std::string target = targetName(name);
+        Scalar L = prior ? 0.15 : !target.empty() ? 0.25 : 0.35; // [m]
         for(int i = 0; i < 3; ++i)
         {
-            std::vector<glm::vec3>& v = prior ? priors : axes[i];
+            std::vector<glm::vec3>& v = prior ? priors : !target.empty() ? targets : axes[i];
             v.push_back(gl(T.getOrigin()));
             v.push_back(gl(T.getOrigin() + T.getBasis().getColumn(i) * L));
         }
@@ -1116,13 +1140,19 @@ void SceneEditor::DrawLandmarkFrames()
             content->DrawPrimitives(PrimitiveType::LINES, &axes[i], colors[i]);
     if(!priors.empty())
         content->DrawPrimitives(PrimitiveType::LINES, &priors, glm::vec4(0.6f, 0.6f, 0.6f, 1.f));
+    if(!targets.empty())
+        content->DrawPrimitives(PrimitiveType::LINES, &targets, glm::vec4(1.f, 0.85f, 0.1f, 1.f));
     OpenGLState::BindVertexArray(guiVertexArray);
 
     for(const auto& [name, T] : frames)
     {
         float sx, sy;
         if(name.rfind("prior_", 0) != 0 && ToScreen(T.getOrigin(), sx, sy))
-            app_->getGUI()->DoLabel(sx + 6.f, sy + 4.f, name, glm::vec4(0.6f, 1.f, 0.6f, 1.f), 0.85f);
+        {
+            const float scale = 0.85f, x = sx + 6.f, y = sy + 3.f;
+            WhiteBox(x, y, labelPrinter.TextLength(name) * scale, STANDARD_FONT_SIZE * scale);
+            app_->getGUI()->DoLabel(x, y, name, glm::vec4(0.f, 0.f, 0.f, 1.f), scale);
+        }
     }
 }
 
