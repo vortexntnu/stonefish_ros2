@@ -59,7 +59,7 @@ namespace sf
     {
         std::string name;
         bool useFieldOfView = false;
-        double frontRange = 8.0, frontHalfFovDeg = 45.0;
+        double frontRange = 8.0; // the view's width is the camera's
         double downRadius = 1.5, downMaxAltitude = 3.0;
         double nearRange = 2.0, centreHalfFovDeg = 15.0;
         double positionNoise = 0.0;

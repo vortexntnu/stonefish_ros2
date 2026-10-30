@@ -19,6 +19,7 @@
 #include <Stonefish/entities/SolidEntity.h>
 #include <Stonefish/entities/StaticEntity.h>
 #include <Stonefish/sensors/Sensor.h>
+#include <Stonefish/sensors/vision/Camera.h>
 #include <vortex/utils/ros/landmark_names.hpp>
 #include <algorithm>
 #include <cmath>
@@ -251,13 +252,25 @@ bool SceneLandmarks::InView(const SceneLandmark& l, const Vector3& p, double& ba
         return altitude > 0 && altitude <= prof.downMaxAltitude && horizontal <= prof.downRadius;
     }
 
-    // In front of the camera (optical frame: z forward)
-    Vector3 forward = C.getBasis().getColumn(2);
-    double angle = std::acos(std::clamp((double)forward.dot(viewDir), -1.0, 1.0)) * 180.0 / M_PI;
-    if(range > prof.frontRange || angle > prof.frontHalfFovDeg)
+    // In the camera's own image (optical frame: z forward, x right, y down),
+    // so the view follows whatever camera the drone has
+    Vector3 c = C.getBasis().transpose() * d;
+    if(range > prof.frontRange || c.getZ() <= 0)
         return false;
+    double halfH = 45.0, halfV = 45.0; // [deg], a sensor that is not a camera
+    if(Camera* cam = dynamic_cast<Camera*>(camera))
+    {
+        unsigned int w = 1, h = 1;
+        cam->getResolution(w, h);
+        halfH = cam->getHorizontalFOV() / 2.0;
+        halfV = std::atan(std::tan(halfH * M_PI / 180.0) * h / std::max(w, 1u)) * 180.0 / M_PI;
+    }
+    if(std::atan2(std::abs(c.getX()), c.getZ()) * 180.0 / M_PI > halfH
+       || std::atan2(std::abs(c.getY()), c.getZ()) * 180.0 / M_PI > halfV)
+        return false;
+    double angle = std::atan2(std::hypot(c.getX(), c.getY()), c.getZ()) * 180.0 / M_PI;
     double bRange = std::clamp((range - prof.nearRange) / std::max(prof.frontRange - prof.nearRange, 1e-6), 0.0, 1.0);
-    double bAngle = std::clamp((angle - prof.centreHalfFovDeg) / std::max(prof.frontHalfFovDeg - prof.centreHalfFovDeg, 1e-6), 0.0, 1.0);
+    double bAngle = std::clamp((angle - prof.centreHalfFovDeg) / std::max(halfH - prof.centreHalfFovDeg, 1e-6), 0.0, 1.0);
     badness = std::max(bRange, bAngle);
     return true;
 }

@@ -260,11 +260,13 @@ void ROS2SimulationManager::SubscribeLandmarkFrames(const std::string& mapFrame,
 std::map<std::string, Transform> ROS2SimulationManager::getLandmarkFrames()
 {
     std::map<std::string, Transform> out;
-    double now = nh_->get_clock()->now().seconds();
     std::lock_guard<std::mutex> lock(waypointMutex_);
     auto world = tfFrames_.find(worldFrame_);
     if(world == tfFrames_.end() || world->second.parent != mapFrame_)
         return out;
+    // Old next to the server's newest map -> world, not the clock: when the
+    // simulator falls behind on /tf everything lags together instead of vanishing
+    double now = world->second.stamp;
     Transform mapToWorld = world->second.pose.inverse();
     std::string prefix = mapFrame_.substr(0, mapFrame_.rfind('/') + 1); // "orca/"
     for(const auto& [name, frame] : tfFrames_)
