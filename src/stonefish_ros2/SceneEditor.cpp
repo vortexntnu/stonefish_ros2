@@ -1090,7 +1090,8 @@ void SceneEditor::DrawLandmarkFrames()
 {
     // The landmark server's frames (best landmark of each class, gate targets, start, priors) as
     // red/green/blue x/y/z axes where the stack thinks they are. Targets (<parent>/<name> offsets,
-    // not /measured) are all yellow. Names in black on white. Main window only, like the waypoint.
+    // not /measured) are yellow and priors grey, with the tip of each axis in its colour. Names in
+    // black on white. Main window only, like the waypoint.
     static OpenGLPrinter labelPrinter(GetShaderPath() + std::string(STANDARD_FONT_NAME), STANDARD_FONT_SIZE); // label widths
     // A plain white rectangle behind a label (screen coordinates from the top left)
     auto WhiteBox = [this](float x, float y, float w, float h) {
@@ -1117,6 +1118,7 @@ void SceneEditor::DrawLandmarkFrames()
         return last == "measured" ? std::string() : last;
     };
     std::vector<glm::vec3> axes[3], priors, targets;
+    const Scalar tip = 0.35; // [share of the axis] in the axis' colour on a target or prior
     for(const auto& [name, T] : frames)
     {
         bool prior = name.rfind("prior_", 0) == 0;
@@ -1124,9 +1126,19 @@ void SceneEditor::DrawLandmarkFrames()
         Scalar L = prior ? 0.15 : !target.empty() ? 0.25 : 0.35; // [m]
         for(int i = 0; i < 3; ++i)
         {
-            std::vector<glm::vec3>& v = prior ? priors : !target.empty() ? targets : axes[i];
+            Vector3 end = T.getOrigin() + T.getBasis().getColumn(i) * L;
+            if(!prior && target.empty())
+            {
+                axes[i].push_back(gl(T.getOrigin()));
+                axes[i].push_back(gl(end));
+                continue;
+            }
+            Vector3 mid = T.getOrigin() + T.getBasis().getColumn(i) * (L * (1.0 - tip));
+            std::vector<glm::vec3>& v = prior ? priors : targets;
             v.push_back(gl(T.getOrigin()));
-            v.push_back(gl(T.getOrigin() + T.getBasis().getColumn(i) * L));
+            v.push_back(gl(mid));
+            axes[i].push_back(gl(mid));
+            axes[i].push_back(gl(end));
         }
     }
 
